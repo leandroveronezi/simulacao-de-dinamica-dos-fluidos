@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="pt-br" data-theme="dark">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Simulação de Dinâmica dos Fluidos - Editor Avançado</title>
+    <!-- Pico.css -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <!-- SweetAlert2 -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <header>
+            <h4><i class="fa-solid fa-wind"></i> Dinâmica dos Fluidos</h4>
+            <div class="toolbar">
+                <div class="button-group">
+                    <button id="startButton"><i class="fa-solid fa-play"></i> Iniciar</button>
+                    <button id="resetFluidButton" class="secondary"><i class="fa-solid fa-arrow-rotate-left"></i> Fluido</button>
+                    <button id="stepButton" class="secondary"><i class="fa-solid fa-forward-step"></i> Passo</button>
+                    <button id="clearButton" class="contrast"><i class="fa-solid fa-trash-can"></i> Limpar</button>
+                    <div class="separator"></div>
+                    <button id="undoButton" title="Desfazer (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
+                    <button id="redoButton" title="Refazer (Ctrl+Y)"><i class="fa-solid fa-rotate-right"></i></button>
+                    <div class="separator"></div>
+                    <button id="importButton" class="secondary outline" title="Importar Configuração"><i class="fa-solid fa-upload"></i></button>
+                    <button id="exportButton" class="secondary outline" title="Exportar Configuração"><i class="fa-solid fa-download"></i></button>
+                    <button id="screenshotButton" class="secondary outline" title="Capturar Tela"><i class="fa-solid fa-camera"></i></button>
+                </div>
+            </div>
+        </header>
+
+        <main id="simulation-container">
+            <aside id="left-sidebar" class="sidebar">
+                <div class="tool-palette">
+                    <button class="tool-button active" data-tool="brush" title="Pincel"><i class="fa-solid fa-pencil"></i></button>
+                    <button class="tool-button" data-tool="line" title="Linha"><i class="fa-solid fa-minus"></i></button>
+                    <button class="tool-button" data-tool="rectangle_filled" title="Retângulo (Preenchido)"><i class="fa-solid fa-square"></i></button>
+                    <button class="tool-button" data-tool="ellipse_filled" title="Elipse (Preenchida)"><i class="fa-solid fa-circle"></i></button>
+                    <button class="tool-button" data-tool="rectangle_outline" title="Retângulo (Contorno)"><i class="fa-regular fa-square"></i></button>
+                    <button class="tool-button" data-tool="ellipse_outline" title="Elipse (Contorno)"><i class="fa-regular fa-circle"></i></button>
+                    <button class="tool-button" data-tool="rounded_rectangle" title="Retângulo Arredondado"><i class="fa-solid fa-draw-polygon"></i></button>
+                    <button class="tool-button" data-tool="fill" title="Preenchimento"><i class="fa-solid fa-fill-drip"></i></button>
+                    <button class="tool-button" data-tool="spray" title="Spray"><i class="fa-solid fa-spray-can"></i></button>
+                    <button class="tool-button" data-tool="eraser" title="Borracha Retangular"><i class="fa-solid fa-eraser"></i></button>
+                    <hr>
+                    <button class="tool-button" data-tool="smoke" title="Fumaça / Corante"><i class="fa-solid fa-smog"></i></button>
+                    <button class="tool-button" data-tool="select" title="Seleção"><i class="fa-solid fa-vector-square"></i></button>
+                </div>
+            </aside>
+
+            <div id="canvas-container">
+                <canvas id="theCanvas">Seu navegador não suporta a tag canvas do HTML5.</canvas>
+            </div>
+
+            <aside id="right-sidebar" class="sidebar">
+                <article id="tool-options-panel" hidden>
+                    <h5><i class="fa-solid fa-toolbox"></i> Opções da Ferramenta</h5>
+                    <div id="spray-options" hidden>
+                        <label for="spraySizeSlider">Tamanho do Spray: <span id="spraySizeValue">10</span></label>
+                        <input id="spraySizeSlider" type="range" min="2" max="50" step="1" value="10">
+                    </div>
+                </article>
+
+                <article id="selection-options-panel" hidden>
+                    <h5><i class="fa-solid fa-object-group"></i> Opções da Seleção</h5>
+                    <div class="button-grid">
+                        <button id="copySelectionButton" title="Copiar"><i class="fa-solid fa-copy"></i></button>
+                        <button id="cutSelectionButton" title="Recortar"><i class="fa-solid fa-scissors"></i></button>
+                        <button id="flipHorizontalButton" title="Inverter Horizontalmente"><i class="fa-solid fa-arrows-left-right"></i></button>
+                        <button id="flipVerticalButton" title="Inverter Verticalmente"><i class="fa-solid fa-arrows-up-down"></i></button>
+                        <button id="rotate90Button" title="Rotacionar 90° Horário"><i class="fa-solid fa-rotate-right"></i></button>
+                        <button id="rotate180Button" title="Rotacionar 180°"><i class="fa-solid fa-rotate"></i></button>
+                        <button id="rotate270Button" title="Rotacionar 90° Anti-horário"><i class="fa-solid fa-rotate-left"></i></button>
+                    </div>
+                    <button id="deleteSelectionButton" class="contrast"><i class="fa-solid fa-trash-can"></i> Apagar Seleção</button>
+                    <button id="clearSelectionButton" class="secondary"><i class="fa-solid fa-xmark"></i> Limpar Seleção</button>
+                </article>
+
+                <article>
+                    <h5><i class="fa-solid fa-sliders"></i> Simulação</h5>
+                    <label for="speedSlider">Velocidade do Fluxo: <span id="speedValue">0.100</span>
+                        <i id="speedHelp" class="fas fa-circle-question help-icon" title="Entenda a velocidade"></i>
+                    </label>
+                    <input id="speedSlider" type="range" min="0" max="0.10" step="0.005" value="0.1">
+
+                    <label for="viscSlider">Viscosidade: <span id="viscValue">0.020</span>
+                        <i id="viscosityHelp" class="fas fa-circle-question help-icon" title="Valores de referência"></i>
+                    </label>
+                    <input id="viscSlider" type="range" min="0.005" max="0.2" step="0.005" value="0.02">
+
+                    <label for="sizeSelect">Resolução</label>
+                    <select id="sizeSelect">
+                        <option value="10">Muito Baixa</option>
+                        <option value="8">Baixa</option>
+                        <option value="6">Média</option>
+                        <option value="5" selected>Boa</option>
+                        <option value="4">Alta</option>
+                        <option value="3">Muito Alta</option>
+                        <option value="2">Ultra</option>
+                    </select>
+
+                    <label for="stepsSlider">Velocidade da Animação</label>
+                    <input id="stepsSlider" type="range" min="1" max="40" step="1" value="20">
+                    <small>Passos/segundo: <span id="speedReadout">0</span></small>
+                </article>
+
+                <article>
+                    <h5><i class="fa-solid fa-shapes"></i> Formas</h5>
+                    <select id="barrierSelect">
+                        <option>Selecionar forma</option>
+                    </select>
+                    <button id="importCoordsButton" class="secondary outline"><i class="fa-solid fa-paste"></i> Importar Coordenadas</button>
+                </article>
+                <article>
+                    <h5><i class="fa-solid fa-eye"></i> Visualização</h5>
+                    <label for="plotSelect">Exibir
+                        <i id="visualizationHelp" class="fas fa-circle-question help-icon" title="Entenda as visualizações"></i>
+                    </label>
+                    <select id="plotSelect">
+                        <option>Densidade</option>
+                        <option>Velocidade X</option>
+                        <option>Velocidade Y</option>
+                        <option>Velocidade (módulo)</option>
+                        <option selected>Rotação (Curl)</option>
+                    </select>
+
+                    <label for="contrastSlider">Contraste</label>
+                    <input id="contrastSlider" type="range" min="-10" max="10" step="1" value="0">
+
+                    <fieldset>
+                        <label for="tracerCheck"><input type="checkbox" id="tracerCheck" role="switch">Traçadores</label>
+                        <label for="forceCheck"><input type="checkbox" id="forceCheck" role="switch">Força</label>
+                        <label for="sensorCheck"><input type="checkbox" id="sensorCheck" role="switch">Sensor</label>
+                    </fieldset>
+                </article>
+            </aside>
+        </main>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+
+</html>
