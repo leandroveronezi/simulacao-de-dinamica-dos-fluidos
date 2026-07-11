@@ -6,7 +6,9 @@
 export class FluidSolver {
     static CELL_TYPE = Object.freeze({
         NORMAL: 0,
-        BARRIER: 1
+        BARRIER: 1,
+        SOURCE: 2,
+        SINK: 3
     });
 
     static N_TRACERS = 144;
@@ -19,6 +21,7 @@ export class FluidSolver {
         this.ONE_NINTH = 1.0 / 9.0;
         this.ONE_THIRTY_SIXTH = 1.0 / 36.0;
 
+        this.boundaryMode = 'channel'; // 'channel' | 'open'
         this.resize(xdim, ydim);
     }
 
@@ -59,6 +62,8 @@ export class FluidSolver {
         this.curl = new Float32Array(size);
 
         this.cellType = new Uint8Array(size);
+        this.sourceVx = new Float32Array(size);
+        this.sourceVy = new Float32Array(size);
         this.dyeSources = [];
 
         this.sensorX = Math.round(xdim / 2);
@@ -155,6 +160,7 @@ export class FluidSolver {
         this.collide(viscosity);
         this.stream();
         this.setBoundaries(u0);
+        this._applySourcesAndSinks();
         if (moveTracers) this.moveTracers();
         this.moveDyeTracers();
         this._emitNewDyeTracers();
@@ -162,11 +168,17 @@ export class FluidSolver {
 
     /**
      * @description Define as condições de contorno do domínio de simulação.
-     * - Borda esquerda: Fluxo de entrada com velocidade constante.
-     * - Borda direita: Fluxo de saída com gradiente zero.
-     * - Bordas superior/inferior: Paredes com deslizamento livre.
+     * - Modo 'channel': borda esquerda = entrada com velocidade constante, borda direita =
+     *   saída com gradiente zero, bordas superior/inferior = paredes com deslizamento livre.
+     * - Modo 'open': as 4 bordas viram saída com gradiente zero — sem entrada/parede fixa.
+     *   Quem movimenta o fluido nesse modo são as células SOURCE pintadas pelo usuário.
      */
     setBoundaries(u0) {
+        if (this.boundaryMode === 'open') {
+            this._applyOpenBoundaries();
+            return;
+        }
+
         // Borda de entrada (esquerda)
         for (let y = 0; y < this.ydim; y++) {
             this.setEquilibrium(0, y, u0, 0, 1);
@@ -198,6 +210,53 @@ export class FluidSolver {
             this.nN[i_bot] = this.nS[i_bot] || 0;
             this.nNE[i_bot] = this.nSW[i_bot] || 0;
             this.nNW[i_bot] = this.nSE[i_bot] || 0;
+        }
+    }
+
+    /**
+     * @private
+     * @description Modo 'open': copia as distribuições do vizinho interno em todas as 4
+     * bordas (gradiente zero / saída livre), sem impor nenhuma velocidade de entrada.
+     */
+    _applyOpenBoundaries() {
+        const copyCell = (i, iFrom) => {
+            this.n0[i] = this.n0[iFrom] || 0;
+            this.nN[i] = this.nN[iFrom] || 0;
+            this.nS[i] = this.nS[iFrom] || 0;
+            this.nE[i] = this.nE[iFrom] || 0;
+            this.nW[i] = this.nW[iFrom] || 0;
+            this.nNE[i] = this.nNE[iFrom] || 0;
+            this.nSE[i] = this.nSE[iFrom] || 0;
+            this.nNW[i] = this.nNW[iFrom] || 0;
+            this.nSW[i] = this.nSW[iFrom] || 0;
+        };
+
+        for (let y = 0; y < this.ydim; y++) {
+            copyCell(y * this.xdim, 1 + y * this.xdim);
+            copyCell(this.xdim - 1 + y * this.xdim, this.xdim - 2 + y * this.xdim);
+        }
+        for (let x = 0; x < this.xdim; x++) {
+            copyCell(x, x + this.xdim);
+            copyCell(x + (this.ydim - 1) * this.xdim, x + (this.ydim - 2) * this.xdim);
+        }
+    }
+
+    /**
+     * @private
+     * @description Impõe a velocidade das células SOURCE (entradas pintadas) e relaxa as
+     * células SINK (saídas pintadas) de volta ao estado de repouso, absorvendo o fluido local.
+     */
+    _applySourcesAndSinks() {
+        for (let i = 0; i < this.xdim * this.ydim; i++) {
+            if (this.cellType[i] === FluidSolver.CELL_TYPE.SOURCE) {
+                const x = i % this.xdim,
+                    y = Math.floor(i / this.xdim);
+                this.setEquilibrium(x, y, this.sourceVx[i], this.sourceVy[i], 1);
+            } else if (this.cellType[i] === FluidSolver.CELL_TYPE.SINK) {
+                const x = i % this.xdim,
+                    y = Math.floor(i / this.xdim);
+                this.setEquilibrium(x, y, 0, 0, 1);
+            }
         }
     }
 
@@ -380,7 +439,11 @@ export class FluidSolver {
             if (!isFinite(ux_interp) || !isFinite(uy_interp)) continue;
             this.tracerX[t] += ux_interp;
             this.tracerY[t] += uy_interp;
-            if (this.tracerX[t] > this.xdim - 1) {
+            const rx = Math.floor(this.tracerX[t]);
+            const ry = Math.floor(this.tracerY[t]);
+            const hitsObstacle = rx >= 0 && rx < this.xdim && ry >= 0 && ry < this.ydim &&
+                (this.cellType[rx + ry * this.xdim] === FluidSolver.CELL_TYPE.BARRIER || this.cellType[rx + ry * this.xdim] === FluidSolver.CELL_TYPE.SINK);
+            if (this.tracerX[t] > this.xdim - 1 || hitsObstacle) {
                 this.tracerX[t] = 0;
                 this.tracerY[t] = Math.random() * this.ydim;
             }
@@ -439,7 +502,12 @@ export class FluidSolver {
             tracer.y += uy_interp;
             const rx = Math.floor(tracer.x);
             const ry = Math.floor(tracer.y);
-            if (rx < 0 || rx >= this.xdim || ry < 0 || ry >= this.ydim || this.cellType[rx + ry * this.xdim] === FluidSolver.CELL_TYPE.BARRIER) {
+            if (rx < 0 || rx >= this.xdim || ry < 0 || ry >= this.ydim) {
+                this._recycleDyeTracer(tracer);
+                continue;
+            }
+            const cellType = this.cellType[rx + ry * this.xdim];
+            if (cellType === FluidSolver.CELL_TYPE.BARRIER || cellType === FluidSolver.CELL_TYPE.SINK) {
                 this._recycleDyeTracer(tracer);
             }
         }

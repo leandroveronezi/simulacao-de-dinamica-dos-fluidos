@@ -24,7 +24,7 @@
 
     --ruler-bg-color: #141a22;
     --ruler-line-color: var(--ink-dim);
-    --grid-line-color: rgba(124, 135, 151, 0.16);
+    --grid-line-color: rgba(124, 135, 151, 0.4);
 }
 
 * {
@@ -263,6 +263,7 @@ main {
     flex-grow: 1;
     position: relative;
     background-color: var(--void);
+    overflow: hidden;
 }
 
 canvas {
@@ -272,6 +273,14 @@ canvas {
     width: 100%;
     height: 100%;
     cursor: crosshair;
+}
+
+#canvas-container.tool-pan canvas {
+    cursor: grab;
+}
+
+#canvas-container.tool-pan.panning canvas {
+    cursor: grabbing;
 }
 
 /* ---------- Sidebar sections ---------- */
@@ -400,11 +409,7 @@ input[type="checkbox"][role="switch"] {
     appearance: none;
     width: var(--switch-width);
     height: var(--switch-height);
-    background-color: var(--inset);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Ccircle cx='9' cy='9' r='7' fill='%237c8797'/%3E%3C/svg%3E");
-    background-position: left 1px center;
-    background-repeat: no-repeat;
-    background-size: calc(var(--switch-height) - 2px) calc(var(--switch-height) - 2px);
+    background: var(--inset) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Ccircle cx='9' cy='9' r='7' fill='%237c8797'/%3E%3C/svg%3E") no-repeat left 1px center / calc(var(--switch-height) - 2px) calc(var(--switch-height) - 2px) !important;
     border: 1px solid var(--line-strong);
     border-radius: 1rem;
     cursor: pointer;
@@ -412,14 +417,18 @@ input[type="checkbox"][role="switch"] {
     padding: 0;
     box-sizing: border-box;
     flex-shrink: 0;
-    transition: background-position .15s ease, background-color .15s ease, border-color .15s ease;
+    transition: background .15s ease, border-color .15s ease;
+}
+
+input[type="checkbox"][role="switch"]::before,
+input[type="checkbox"][role="switch"]::after {
+    display: none !important;
+    content: none !important;
 }
 
 input[type="checkbox"][role="switch"]:checked {
-    background-color: rgba(255, 180, 84, 0.2);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Ccircle cx='9' cy='9' r='7' fill='%23ffb454'/%3E%3C/svg%3E");
-    background-position: right 1px center;
-    border-color: var(--accent);
+    background: rgba(255, 180, 84, 0.2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Ccircle cx='9' cy='9' r='7' fill='%23ffb454'/%3E%3C/svg%3E") no-repeat right 1px center / calc(var(--switch-height) - 2px) calc(var(--switch-height) - 2px) !important;
+    border-color: var(--accent) !important;
 }
 
 fieldset {
@@ -444,6 +453,34 @@ small {
     width: 100%;
     margin-top: 0.5rem;
     justify-content: center;
+}
+
+/* ---------- Tipo de desenho (Barreira/Entrada/Saída) ---------- */
+
+#paint-type-panel .button-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.5rem;
+}
+
+.paint-type-button {
+    width: 100%;
+    justify-content: center;
+    background: var(--inset);
+    border: 1px solid var(--line-strong);
+    color: var(--ink);
+    font-size: 0.78rem;
+    padding: 0.5rem 0.4rem;
+}
+
+.paint-type-button:hover {
+    background: #212a37;
+}
+
+.paint-type-button.active {
+    background: rgba(255, 180, 84, 0.15);
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 /* ---------- SweetAlert2 ---------- */

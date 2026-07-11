@@ -7,6 +7,13 @@ import { Renderer } from './Renderer.js';
  * import/export de configuração. Orquestra um FluidSolver (física) e um Renderer (canvas).
  */
 export class FluidSimulationApp {
+    static PX_PER_SQUARE = 5;
+    static MIN_ZOOM = 1;
+    static MAX_ZOOM = 8;
+    static ZOOM_STEP = 1.15;
+    static MAX_SOURCE_SPEED = 0.15;
+    static DRAG_CELLS_FOR_MAX_SPEED = 20;
+
     /**
      * @constructor
      * @param {string} containerSelector - O seletor CSS para o elemento principal da aplicação.
@@ -45,7 +52,11 @@ export class FluidSimulationApp {
         this.importButton = document.querySelector('#importButton');
         this.exportButton = document.querySelector('#exportButton');
         this.screenshotButton = document.querySelector('#screenshotButton');
-        this.sizeSelect = this.root.querySelector('#sizeSelect');
+        this.zoomOutButton = document.querySelector('#zoomOutButton');
+        this.zoomInButton = document.querySelector('#zoomInButton');
+        this.resetZoomButton = document.querySelector('#resetZoomButton');
+        this.boundaryModeSelect = this.root.querySelector('#boundaryModeSelect');
+        this.paintTypeButtons = this.root.querySelectorAll('.paint-type-button');
         this.stepsSlider = this.root.querySelector('#stepsSlider');
         this.viscSlider = this.root.querySelector('#viscSlider');
         this.viscValue = this.root.querySelector('#viscValue');
@@ -105,6 +116,16 @@ export class FluidSimulationApp {
         this.simulationTimeout = null;
         this.resizeTimeout = null;
         this.resizeObserver = null;
+        this.zoom = 1;
+        this.panX = 0;
+        this.panY = 0;
+        this.panStart = null;
+        this.activePaintType = 'barrier';
+        this.pendingSourceCells = null;
+        this.awaitingDirectionDrag = false;
+        this.directionDragOrigin = null;
+        this.directionDragVx = 0;
+        this.directionDragVy = 0;
     }
 
     /**
@@ -145,7 +166,13 @@ export class FluidSimulationApp {
         this.rotate90Button.addEventListener('click', () => this._rotateSelection(90));
         this.rotate180Button.addEventListener('click', () => this._rotateSelection(180));
         this.rotate270Button.addEventListener('click', () => this._rotateSelection(270));
-        this.sizeSelect.addEventListener('change', () => this._handleResolutionChange());
+        this.zoomOutButton.addEventListener('click', () => this._zoomBy(1 / FluidSimulationApp.ZOOM_STEP));
+        this.zoomInButton.addEventListener('click', () => this._zoomBy(FluidSimulationApp.ZOOM_STEP));
+        this.resetZoomButton.addEventListener('click', () => this._resetView());
+        this.boundaryModeSelect.addEventListener('change', () => this._resetSimulation());
+        this.paintTypeButtons.forEach(button => {
+            button.addEventListener('click', () => this._setActivePaintType(button.dataset.paintType));
+        });
         this.viscSlider.addEventListener('input', () => this.adjustViscosity());
         this.viscosityPresetSelect.addEventListener('change', () => this._applyViscosityPreset());
         this.plotSelect.addEventListener('change', () => {
@@ -173,6 +200,7 @@ export class FluidSimulationApp {
         this.canvas.addEventListener('mousemove', this._handleMouseMove.bind(this));
         this.canvas.addEventListener('mouseleave', this._handleMouseLeave.bind(this));
         document.body.addEventListener('mouseup', this._handleMouseUp.bind(this));
+        this.canvasContainer.addEventListener('wheel', this._handleWheelZoom.bind(this), { passive: false });
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.key === 'z') {
                 e.preventDefault();
@@ -183,6 +211,7 @@ export class FluidSimulationApp {
                 this.redo();
             }
             if (e.key === 'Escape') {
+                if (this.awaitingDirectionDrag) this._cancelDirectionDrag();
                 if (this.clipboard) this._clearClipboard();
                 if (this.selectionArea) this._clearSelection();
             }
@@ -208,6 +237,50 @@ export class FluidSimulationApp {
     _handleContainerResize() {
         this.canvas.width = this.canvasContainer.clientWidth;
         this.canvas.height = this.canvasContainer.clientHeight;
+        this._resetView();
+        this._requestPaint();
+    }
+
+    _resetView() {
+        this.zoom = 1;
+        this.panX = 0;
+        this.panY = 0;
+        this._requestPaint();
+    }
+
+    /**
+     * @private
+     * @description Aplica zoom com a roda do mouse, mantendo o ponto sob o cursor fixo na tela.
+     */
+    _handleWheelZoom(e) {
+        e.preventDefault();
+        const rect = this.canvasContainer.getBoundingClientRect();
+        const factor = e.deltaY < 0 ? FluidSimulationApp.ZOOM_STEP : 1 / FluidSimulationApp.ZOOM_STEP;
+        this._zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top);
+    }
+
+    /**
+     * @private
+     * @description Aplica zoom pelos botões +/-, centrado no meio da área visível do canvas.
+     */
+    _zoomBy(factor) {
+        this._zoomAt(factor, this.canvasContainer.clientWidth / 2, this.canvasContainer.clientHeight / 2);
+    }
+
+    /**
+     * @private
+     * @description Muda o zoom por `factor`, mantendo o ponto (pivotX, pivotY) — relativo ao
+     * contêiner do canvas — fixo na tela.
+     */
+    _zoomAt(factor, pivotX, pivotY) {
+        const contentX = (pivotX - this.panX) / this.zoom;
+        const contentY = (pivotY - this.panY) / this.zoom;
+
+        const newZoom = Math.min(FluidSimulationApp.MAX_ZOOM, Math.max(FluidSimulationApp.MIN_ZOOM, this.zoom * factor));
+
+        this.panX = pivotX - contentX * newZoom;
+        this.panY = pivotY - contentY * newZoom;
+        this.zoom = newZoom;
         this._requestPaint();
     }
 
@@ -266,37 +339,18 @@ export class FluidSimulationApp {
 
     /**
      * @private
-     * @description Confirma com o usuário antes de alterar a resolução, pois isso reseta a simulação.
-     */
-    async _handleResolutionChange() {
-        const result = await Swal.fire({
-            title: 'Confirmar Alteração de Resolução?',
-            text: "Esta ação limpará todas as barreiras e a área de transferência. Deseja continuar?",
-            icon: 'warning',
-            showCancelButton: true,
-            confirmButtonText: 'Sim, alterar',
-            cancelButtonText: 'Cancelar'
-        });
-        if (result.isConfirmed) {
-            this._resetSimulation();
-        } else {
-            this.sizeSelect.value = this.pxPerSquare;
-        }
-    }
-
-    /**
-     * @private
-     * @description Reseta toda a simulação para um estado inicial com base na resolução selecionada.
+     * @description Reseta toda a simulação para um estado inicial.
      */
     _resetSimulation() {
-        this.pxPerSquare = Number(this.sizeSelect.value);
+        this.pxPerSquare = FluidSimulationApp.PX_PER_SQUARE;
         const xdim = Math.floor((this.canvasContainer.clientWidth - Renderer.RULER_SIZE) / this.pxPerSquare);
         const ydim = Math.floor((this.canvasContainer.clientHeight - Renderer.RULER_SIZE) / this.pxPerSquare);
         this.canvas.width = this.canvasContainer.clientWidth;
         this.canvas.height = this.canvasContainer.clientHeight;
 
         this.solver = new FluidSolver(xdim, ydim);
-        this.solver.initFluid(Number(this.speedSlider.value));
+        this.solver.boundaryMode = this.boundaryModeSelect.value;
+        this.solver.initFluid(this.solver.boundaryMode === 'open' ? 0 : Number(this.speedSlider.value));
         this.solver.initTracers(this.tracerCheck.checked);
         this.solver.initDyeTracers();
 
@@ -306,8 +360,9 @@ export class FluidSimulationApp {
         this._clearSelection();
         this._clearClipboard();
         this._setActiveTool('brush'); // Garante estado de UI consistente
+        this._setActivePaintType('barrier');
+        this._updateUndoRedoButtons();
 
-        this._saveState();
         this._requestPaint();
     }
 
@@ -327,12 +382,56 @@ export class FluidSimulationApp {
         const showToolOptions = (toolName === 'spray');
         this.toolOptionsPanel.hidden = !showToolOptions;
         this.sprayOptions.hidden = !showToolOptions;
+        this.canvasContainer.classList.toggle('tool-pan', toolName === 'pan');
+    }
+
+    /**
+     * @private
+     * @param {string} paintType - 'barrier' | 'source' | 'sink'
+     * @description Define o que as ferramentas de forma (linha/retângulo/elipse/etc.) desenham.
+     */
+    _setActivePaintType(paintType) {
+        this.activePaintType = paintType;
+        this.paintTypeButtons.forEach(button => {
+            button.classList.toggle('active', button.dataset.paintType === paintType);
+        });
+    }
+
+    /**
+     * @private
+     * @description Retorna o CELL_TYPE correspondente ao tipo de pintura ativo no momento.
+     */
+    _activeCellType() {
+        switch (this.activePaintType) {
+            case 'source':
+                return FluidSolver.CELL_TYPE.SOURCE;
+            case 'sink':
+                return FluidSolver.CELL_TYPE.SINK;
+            default:
+                return FluidSolver.CELL_TYPE.BARRIER;
+        }
     }
 
     _handleMouseDown(e) {
         e.preventDefault();
+        if (this.activeTool === 'pan') {
+            this.mouseIsDown = true;
+            this.panStart = {
+                x: e.pageX,
+                y: e.pageY,
+                panX: this.panX,
+                panY: this.panY
+            };
+            this.canvasContainer.classList.add('panning');
+            return;
+        }
         const canvasLoc = this.pageToCanvas(e.pageX, e.pageY);
         const gridLoc = this.canvasToGrid(canvasLoc.x, canvasLoc.y);
+
+        if (this.awaitingDirectionDrag) {
+            this.mouseIsDown = true;
+            return;
+        }
 
         if (this.clipboard) {
             this._pasteSelection(gridLoc);
@@ -341,6 +440,7 @@ export class FluidSimulationApp {
 
         this.mouseIsDown = true;
         this.toolStartPoint = gridLoc;
+        if (this.activePaintType === 'source') this.pendingSourceCells = [];
 
         if (this.sensorCheck.checked && gridLoc.x >= 0 && gridLoc.y >= 0) {
             const dx = (gridLoc.x - this.solver.sensorX) * this.pxPerSquare;
@@ -363,7 +463,7 @@ export class FluidSimulationApp {
 
         switch (this.activeTool) {
             case 'brush':
-                this.setCell(gridLoc.x, gridLoc.y, FluidSolver.CELL_TYPE.BARRIER);
+                this.setCell(gridLoc.x, gridLoc.y, this._activeCellType());
                 this.lastDrawPoint = gridLoc;
                 break;
             case 'spray':
@@ -385,8 +485,22 @@ export class FluidSimulationApp {
     }
     _handleMouseMove(e) {
         e.preventDefault();
+        if (this.activeTool === 'pan') {
+            if (this.mouseIsDown && this.panStart) {
+                this.panX = this.panStart.panX + (e.pageX - this.panStart.x);
+                this.panY = this.panStart.panY + (e.pageY - this.panStart.y);
+                this._requestPaint();
+            }
+            return;
+        }
         const canvasLoc = this.pageToCanvas(e.pageX, e.pageY);
         this.mouseGridPos = this.canvasToGrid(canvasLoc.x, canvasLoc.y);
+
+        if (this.awaitingDirectionDrag) {
+            if (this.mouseIsDown) this._updateDirectionDrag();
+            this._requestPaint();
+            return;
+        }
 
         if (this.clipboard) {
             this.pastePreviewOrigin = this.mouseGridPos;
@@ -396,7 +510,7 @@ export class FluidSimulationApp {
                 this.solver.sensorY = this.mouseGridPos.y;
             } else if (this.activeTool === 'brush' && this.lastDrawPoint) {
                 if (this.mouseGridPos.x !== this.lastDrawPoint.x || this.mouseGridPos.y !== this.lastDrawPoint.y) {
-                    this._drawLineOnGrid(this.lastDrawPoint, this.mouseGridPos, (x, y) => this.setCell(x, y, FluidSolver.CELL_TYPE.BARRIER));
+                    this._drawLineOnGrid(this.lastDrawPoint, this.mouseGridPos, (x, y) => this.setCell(x, y, this._activeCellType()));
                     this.lastDrawPoint = this.mouseGridPos;
                 }
             } else if (this.activeTool === 'spray') {
@@ -417,6 +531,19 @@ export class FluidSimulationApp {
         if (!this.mouseIsDown) return;
         e.preventDefault();
 
+        if (this.activeTool === 'pan') {
+            this.mouseIsDown = false;
+            this.panStart = null;
+            this.canvasContainer.classList.remove('panning');
+            return;
+        }
+
+        if (this.awaitingDirectionDrag) {
+            this._confirmDirectionDrag();
+            this.mouseIsDown = false;
+            return;
+        }
+
         if (this.toolStartPoint && !this.draggingSensor) {
             const endPoint = this.mouseGridPos;
             if (this.activeTool === 'select') {
@@ -429,7 +556,7 @@ export class FluidSimulationApp {
                 this._saveState();
                 switch (this.activeTool) {
                     case 'line':
-                        this._drawLineOnGrid(this.toolStartPoint, endPoint, (x, y) => this.setCell(x, y, FluidSolver.CELL_TYPE.BARRIER));
+                        this._drawLineOnGrid(this.toolStartPoint, endPoint, (x, y) => this.setCell(x, y, this._activeCellType()));
                         break;
                     case 'rectangle_filled':
                         this._drawRectangleOnGrid(this.toolStartPoint, endPoint, true);
@@ -452,11 +579,80 @@ export class FluidSimulationApp {
                 }
             }
         }
+
+        if (this.activePaintType === 'source' && this.pendingSourceCells && this.pendingSourceCells.length > 0) {
+            this._beginDirectionDrag();
+        } else {
+            this.pendingSourceCells = null;
+        }
+
         this._requestPaint();
         this.mouseIsDown = false;
         this.draggingSensor = false;
         this.lastDrawPoint = null;
         this.toolStartPoint = null;
+    }
+
+    /**
+     * @private
+     * @description Entra no sub-estado de "definir direção": mostra uma seta arrastável
+     * ancorada no centróide das células de Entrada recém-desenhadas.
+     */
+    _beginDirectionDrag() {
+        let sumX = 0,
+            sumY = 0;
+        for (const cell of this.pendingSourceCells) {
+            sumX += cell.x;
+            sumY += cell.y;
+        }
+        this.directionDragOrigin = {
+            x: sumX / this.pendingSourceCells.length,
+            y: sumY / this.pendingSourceCells.length
+        };
+        this.directionDragVx = 0;
+        this.directionDragVy = 0;
+        this.awaitingDirectionDrag = true;
+    }
+
+    _updateDirectionDrag() {
+        const dx = this.mouseGridPos.x - this.directionDragOrigin.x;
+        const dy = this.mouseGridPos.y - this.directionDragOrigin.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const speed = Math.min(FluidSimulationApp.MAX_SOURCE_SPEED, (dist / FluidSimulationApp.DRAG_CELLS_FOR_MAX_SPEED) * FluidSimulationApp.MAX_SOURCE_SPEED);
+        if (dist > 0) {
+            this.directionDragVx = (dx / dist) * speed;
+            this.directionDragVy = (dy / dist) * speed;
+        } else {
+            this.directionDragVx = 0;
+            this.directionDragVy = 0;
+        }
+    }
+
+    /**
+     * @private
+     * @description Confirma a direção/velocidade definida e grava nas células da Entrada.
+     */
+    _confirmDirectionDrag() {
+        for (const cell of this.pendingSourceCells) {
+            const i = cell.x + cell.y * this.solver.xdim;
+            this.solver.sourceVx[i] = this.directionDragVx;
+            this.solver.sourceVy[i] = this.directionDragVy;
+        }
+        this.awaitingDirectionDrag = false;
+        this.pendingSourceCells = null;
+        this.directionDragOrigin = null;
+    }
+
+    /**
+     * @private
+     * @description Cancela a Entrada sendo definida (Esc): desfaz a forma recém-desenhada.
+     */
+    _cancelDirectionDrag() {
+        this.undo();
+        this.awaitingDirectionDrag = false;
+        this.pendingSourceCells = null;
+        this.directionDragOrigin = null;
+        this._requestPaint();
     }
     _applySpray(center) {
         const radius = Number(this.spraySizeSlider.value);
@@ -466,7 +662,7 @@ export class FluidSimulationApp {
             const r = Math.random() * radius;
             const x = Math.round(center.x + r * Math.cos(angle));
             const y = Math.round(center.y + r * Math.sin(angle));
-            this.setCell(x, y, FluidSolver.CELL_TYPE.BARRIER);
+            this.setCell(x, y, this._activeCellType());
         }
     }
     _floodFill(startX, startY) {
@@ -474,7 +670,7 @@ export class FluidSimulationApp {
             ydim = this.solver.ydim;
         if (startX < 0 || startX >= xdim || startY < 0 || startY >= ydim) return;
         const initialType = this.solver.cellType[startX + startY * xdim];
-        if (initialType === FluidSolver.CELL_TYPE.BARRIER) return;
+        if (initialType !== FluidSolver.CELL_TYPE.NORMAL) return;
         const queue = [{
             x: startX,
             y: startY
@@ -489,7 +685,7 @@ export class FluidSimulationApp {
                 x,
                 y
             } = queue.shift();
-            this.setCell(x, y, FluidSolver.CELL_TYPE.BARRIER);
+            this.setCell(x, y, this._activeCellType());
             const neighbors = [{
                 dx: 0,
                 dy: 1
@@ -561,7 +757,7 @@ export class FluidSimulationApp {
             y_end = Math.max(start.y, end.y);
         for (let x = x_start; x <= x_end; x++) {
             for (let y = y_start; y <= y_end; y++) {
-                if (filled || x === x_start || x === x_end || y === y_start || y === y_end) this.setCell(x, y, FluidSolver.CELL_TYPE.BARRIER);
+                if (filled || x === x_start || x === x_end || y === y_start || y === y_end) this.setCell(x, y, this._activeCellType());
             }
         }
     }
@@ -579,9 +775,9 @@ export class FluidSimulationApp {
             for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++) {
                 const norm_dist_sq = ((x - cx) ** 2) / (rx ** 2) + ((y - cy) ** 2) / (ry ** 2);
                 if (filled) {
-                    if (norm_dist_sq <= 1) this.setCell(x, y, FluidSolver.CELL_TYPE.BARRIER);
+                    if (norm_dist_sq <= 1) this.setCell(x, y, this._activeCellType());
                 } else {
-                    if (norm_dist_sq <= 1 && norm_dist_sq > 0.8) this.setCell(x, y, FluidSolver.CELL_TYPE.BARRIER);
+                    if (norm_dist_sq <= 1 && norm_dist_sq > 0.8) this.setCell(x, y, this._activeCellType());
                 }
             }
         }
@@ -593,17 +789,17 @@ export class FluidSimulationApp {
         const y1 = Math.max(start.y, end.y);
         let r = Math.max(1, Math.floor(Math.min(x1 - x0, y1 - y0) * 0.2));
         for (let x = x0 + r; x <= x1 - r; x++) {
-            this.setCell(x, y0, FluidSolver.CELL_TYPE.BARRIER);
-            this.setCell(x, y1, FluidSolver.CELL_TYPE.BARRIER);
+            this.setCell(x, y0, this._activeCellType());
+            this.setCell(x, y1, this._activeCellType());
         }
         for (let y = y0 + r; y <= y1 - r; y++) {
-            this.setCell(x0, y, FluidSolver.CELL_TYPE.BARRIER);
-            this.setCell(x1, y, FluidSolver.CELL_TYPE.BARRIER);
+            this.setCell(x0, y, this._activeCellType());
+            this.setCell(x1, y, this._activeCellType());
         }
-        for (let a = Math.PI; a < 1.5 * Math.PI; a += 0.1 / r) this.setCell(x0 + r + Math.round(r * Math.cos(a)), y0 + r + Math.round(r * Math.sin(a)), FluidSolver.CELL_TYPE.BARRIER);
-        for (let a = 1.5 * Math.PI; a < 2 * Math.PI; a += 0.1 / r) this.setCell(x1 - r + Math.round(r * Math.cos(a)), y0 + r + Math.round(r * Math.sin(a)), FluidSolver.CELL_TYPE.BARRIER);
-        for (let a = 0; a < 0.5 * Math.PI; a += 0.1 / r) this.setCell(x1 - r + Math.round(r * Math.cos(a)), y1 - r + Math.round(r * Math.sin(a)), FluidSolver.CELL_TYPE.BARRIER);
-        for (let a = 0.5 * Math.PI; a < Math.PI; a += 0.1 / r) this.setCell(x0 + r + Math.round(r * Math.cos(a)), y1 - r + Math.round(r * Math.sin(a)), FluidSolver.CELL_TYPE.BARRIER);
+        for (let a = Math.PI; a < 1.5 * Math.PI; a += 0.1 / r) this.setCell(x0 + r + Math.round(r * Math.cos(a)), y0 + r + Math.round(r * Math.sin(a)), this._activeCellType());
+        for (let a = 1.5 * Math.PI; a < 2 * Math.PI; a += 0.1 / r) this.setCell(x1 - r + Math.round(r * Math.cos(a)), y0 + r + Math.round(r * Math.sin(a)), this._activeCellType());
+        for (let a = 0; a < 0.5 * Math.PI; a += 0.1 / r) this.setCell(x1 - r + Math.round(r * Math.cos(a)), y1 - r + Math.round(r * Math.sin(a)), this._activeCellType());
+        for (let a = 0.5 * Math.PI; a < Math.PI; a += 0.1 / r) this.setCell(x0 + r + Math.round(r * Math.cos(a)), y1 - r + Math.round(r * Math.sin(a)), this._activeCellType());
     }
     _eraseRectangleOnGrid(start, end) {
         const x_start = Math.min(start.x, end.x),
@@ -701,7 +897,16 @@ export class FluidSimulationApp {
             mouseGridPos: this.mouseGridPos,
             selectionArea: this.selectionArea,
             clipboard: this.clipboard,
-            pastePreviewOrigin: this.pastePreviewOrigin
+            pastePreviewOrigin: this.pastePreviewOrigin,
+            zoom: this.zoom,
+            panX: this.panX,
+            panY: this.panY,
+            directionHandle: this.awaitingDirectionDrag ? {
+                x: this.directionDragOrigin.x,
+                y: this.directionDragOrigin.y,
+                vx: this.directionDragVx,
+                vy: this.directionDragVy
+            } : null
         };
     }
 
@@ -718,7 +923,7 @@ export class FluidSimulationApp {
         }
     }
     initFluid() {
-        this.solver.initFluid(Number(this.speedSlider.value));
+        this.solver.initFluid(this.solver.boundaryMode === 'open' ? 0 : Number(this.speedSlider.value));
         this._requestPaint();
     }
     resetTimer() {
@@ -924,14 +1129,18 @@ export class FluidSimulationApp {
 
     pageToCanvas(pageX, pageY) {
         const rect = this.canvas.getBoundingClientRect();
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
         return {
-            x: pageX - rect.left,
-            y: pageY - rect.top
+            x: (pageX - rect.left) * scaleX,
+            y: (pageY - rect.top) * scaleY
         };
     }
     canvasToGrid(canvasX, canvasY) {
-        const gridX = Math.floor((canvasX - Renderer.RULER_SIZE) / this.pxPerSquare);
-        const gridY = this.solver.ydim - 1 - Math.floor((canvasY - Renderer.RULER_SIZE) / this.pxPerSquare);
+        const contentX = (canvasX - Renderer.RULER_SIZE - this.panX) / this.zoom;
+        const contentY = (canvasY - Renderer.RULER_SIZE - this.panY) / this.zoom;
+        const gridX = Math.floor(contentX / this.pxPerSquare);
+        const gridY = this.solver.ydim - 1 - Math.floor(contentY / this.pxPerSquare);
         return {
             x: gridX,
             y: gridY
@@ -939,49 +1148,60 @@ export class FluidSimulationApp {
     }
     setCell(x, y, type) {
         if (this.solver.setCell(x, y, type)) {
+            if (type === FluidSolver.CELL_TYPE.SOURCE && this.pendingSourceCells) {
+                this.pendingSourceCells.push({ x, y });
+            }
             this._requestPaint();
         }
     }
 
-    _saveState() {
-        this.undoStack.push({
+    _snapshotState() {
+        return {
             cellTypes: this.solver.cellType.slice(),
+            sourceVx: this.solver.sourceVx.slice(),
+            sourceVy: this.solver.sourceVy.slice(),
             dyeSources: JSON.parse(JSON.stringify(this.solver.dyeSources))
-        });
+        };
+    }
+    _restoreState(state) {
+        this.solver.cellType = state.cellTypes.slice();
+        this.solver.sourceVx = state.sourceVx.slice();
+        this.solver.sourceVy = state.sourceVy.slice();
+        this.solver.dyeSources = JSON.parse(JSON.stringify(state.dyeSources));
+        this.initFluid();
+    }
+    _saveState() {
+        this.undoStack.push(this._snapshotState());
         this.redoStack = [];
         this._updateUndoRedoButtons();
     }
     undo() {
-        if (this.undoStack.length <= 1) return;
-        this.redoStack.push(this.undoStack.pop());
-        const prevState = this.undoStack[this.undoStack.length - 1];
-        this.solver.cellType = prevState.cellTypes.slice();
-        this.solver.dyeSources = JSON.parse(JSON.stringify(prevState.dyeSources));
-        this.initFluid();
+        if (this.undoStack.length === 0) return;
+        this.redoStack.push(this._snapshotState());
+        this._restoreState(this.undoStack.pop());
         this._updateUndoRedoButtons();
     }
     redo() {
         if (this.redoStack.length === 0) return;
-        const nextState = this.redoStack.pop();
-        this.undoStack.push(nextState);
-        this.solver.cellType = nextState.cellTypes.slice();
-        this.solver.dyeSources = JSON.parse(JSON.stringify(nextState.dyeSources));
-        this.initFluid();
+        this.undoStack.push(this._snapshotState());
+        this._restoreState(this.redoStack.pop());
         this._updateUndoRedoButtons();
     }
     _updateUndoRedoButtons() {
-        this.undoButton.disabled = this.undoStack.length <= 1;
+        this.undoButton.disabled = this.undoStack.length === 0;
         this.redoButton.disabled = this.redoStack.length === 0;
     }
 
     _exportConfiguration() {
         const config = {
-            version: 12,
+            version: 13,
+            boundaryMode: this.solver.boundaryMode,
             cellTypes: Array.from(this.solver.cellType),
+            sourceVx: Array.from(this.solver.sourceVx),
+            sourceVy: Array.from(this.solver.sourceVy),
             dyeSources: this.solver.dyeSources,
             flowSpeed: this.speedSlider.value,
             viscosity: this.viscSlider.value,
-            resolution: this.sizeSelect.value,
             animationSpeed: this.stepsSlider.value,
             plotMode: this.plotSelect.selectedIndex,
             contrast: this.contrastSlider.value,
@@ -1030,11 +1250,12 @@ export class FluidSimulationApp {
         this.tracerCheck.checked = config.showTracers;
         this.forceCheck.checked = config.showForce;
         this.sensorCheck.checked = config.showSensor;
-        this.sizeSelect.value = config.resolution;
+        this.boundaryModeSelect.value = config.boundaryMode || 'channel';
         this._resetSimulation();
         this.solver.cellType = Uint8Array.from(config.cellTypes);
+        if (config.sourceVx) this.solver.sourceVx = Float32Array.from(config.sourceVx);
+        if (config.sourceVy) this.solver.sourceVy = Float32Array.from(config.sourceVy);
         this.solver.dyeSources = config.dyeSources || [];
-        this._saveState();
         this.initFluid();
         this.solver.initTracers(this.tracerCheck.checked);
         this.solver.initDyeTracers();

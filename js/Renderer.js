@@ -13,6 +13,8 @@ export class Renderer {
     constructor(canvas) {
         this.canvas = canvas;
         this.context = canvas.getContext('2d');
+        this.offscreenCanvas = document.createElement('canvas');
+        this.offscreenContext = this.offscreenCanvas.getContext('2d');
         this._initializeColorMap();
     }
 
@@ -62,13 +64,15 @@ export class Renderer {
      * @param {FluidSolver} solver
      * @param {number} pxPerSquare
      * @param {object} viewState - { plotIndex, contrast, showTracers, showForce, showSensor,
-     *   sensorX, sensorY, activeTool, toolStartPoint, mouseIsDown, mouseGridPos, selectionArea,
-     *   clipboard, pastePreviewOrigin }
+     *   activeTool, toolStartPoint, mouseIsDown, mouseGridPos, selectionArea, clipboard,
+     *   pastePreviewOrigin, zoom, panX, panY }
      */
     render(solver, pxPerSquare, viewState) {
         this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this._updateSimulationImage(solver, pxPerSquare, viewState);
-        this._drawCanvasOverlays(solver, pxPerSquare, viewState);
+        this._drawContent(solver, pxPerSquare, viewState);
+        this._drawRulersAndGrid(solver, pxPerSquare, viewState);
+        this._drawLegend(viewState);
     }
 
     /**
@@ -83,7 +87,10 @@ export class Renderer {
         const imageHeight = solver.ydim * pxPerSquare;
         if (imageWidth <= 0 || imageHeight <= 0) return;
 
-        const imageData = this.context.createImageData(imageWidth, imageHeight);
+        if (this.offscreenCanvas.width !== imageWidth) this.offscreenCanvas.width = imageWidth;
+        if (this.offscreenCanvas.height !== imageHeight) this.offscreenCanvas.height = imageHeight;
+
+        const imageData = this.offscreenContext.createImageData(imageWidth, imageHeight);
         const data = imageData.data;
 
         const contrast = Math.pow(1.2, Number(viewState.contrast));
@@ -99,6 +106,14 @@ export class Renderer {
                     r = 0;
                     g = 0;
                     b = 0;
+                } else if (solver.cellType[index] === FluidSolver.CELL_TYPE.SOURCE) {
+                    r = 56;
+                    g = 189;
+                    b = 248;
+                } else if (solver.cellType[index] === FluidSolver.CELL_TYPE.SINK) {
+                    r = 255;
+                    g = 93;
+                    b = 93;
                 } else {
                     let value;
                     switch (plotType) {
@@ -139,14 +154,28 @@ export class Renderer {
                 }
             }
         }
-        this.context.putImageData(imageData, Renderer.RULER_SIZE, Renderer.RULER_SIZE);
+        this.offscreenContext.putImageData(imageData, 0, 0);
     }
 
-    _drawCanvasOverlays(solver, pxPerSquare, viewState) {
-        this._drawRulersAndGrid(solver, pxPerSquare, viewState);
-        this._drawLegend(viewState);
+    /**
+     * @private
+     * @description Desenha o conteúdo que acompanha zoom/pan: o mapa de calor (via canvas
+     * offscreen, imune à matriz de transformação) e todos os overlays vetoriais, recortados
+     * à área interna da régua.
+     */
+    _drawContent(solver, pxPerSquare, viewState) {
+        const zoom = viewState.zoom || 1;
+        const panX = viewState.panX || 0;
+        const panY = viewState.panY || 0;
+
         this.context.save();
-        this.context.translate(Renderer.RULER_SIZE, Renderer.RULER_SIZE);
+        this.context.beginPath();
+        this.context.rect(Renderer.RULER_SIZE, Renderer.RULER_SIZE, this.canvas.width - Renderer.RULER_SIZE, this.canvas.height - Renderer.RULER_SIZE);
+        this.context.clip();
+        this.context.translate(Renderer.RULER_SIZE + panX, Renderer.RULER_SIZE + panY);
+        this.context.scale(zoom, zoom);
+
+        this.context.drawImage(this.offscreenCanvas, 0, 0);
         this.drawDyeSources(solver, pxPerSquare);
         this.drawDyeTracers(solver, pxPerSquare);
         if (viewState.showTracers) this.drawTracers(solver, pxPerSquare);
@@ -163,10 +192,23 @@ export class Renderer {
         }
         if (viewState.selectionArea) this._drawSelectionArea(viewState.selectionArea, solver.ydim, pxPerSquare);
         if (viewState.pastePreviewOrigin) this._drawPastePreview(viewState.clipboard, viewState.pastePreviewOrigin, solver.ydim, pxPerSquare);
+        if (viewState.directionHandle) {
+            this.drawDirectionHandle(viewState.directionHandle.x, viewState.directionHandle.y, viewState.directionHandle.vx, viewState.directionHandle.vy, solver.ydim, pxPerSquare);
+        }
         this.context.restore();
     }
 
+    /**
+     * @private
+     * @description Desenha a régua/grade/legenda em espaço fixo de tela — não pan/zoom junto
+     * com o conteúdo, só recalcula onde cada marcação cai dado o zoom/pan atuais.
+     */
     _drawRulersAndGrid(solver, pxPerSquare, viewState) {
+        const zoom = viewState.zoom || 1;
+        const panX = viewState.panX || 0;
+        const panY = viewState.panY || 0;
+        const scaledPx = pxPerSquare * zoom;
+
         this.context.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--ruler-bg-color').trim();
         this.context.fillRect(0, 0, this.canvas.width, Renderer.RULER_SIZE);
         this.context.fillRect(0, 0, Renderer.RULER_SIZE, this.canvas.height);
@@ -176,7 +218,8 @@ export class Renderer {
         this.context.textBaseline = 'middle';
         this.context.textAlign = 'center';
         for (let x = 0; x < solver.xdim; x++) {
-            const canvasX = Renderer.RULER_SIZE + (x + 0.5) * pxPerSquare;
+            const canvasX = Renderer.RULER_SIZE + panX + (x + 0.5) * scaledPx;
+            if (canvasX < Renderer.RULER_SIZE || canvasX > this.canvas.width) continue;
             if (x % 10 === 0) {
                 this.context.fillText(x, canvasX, Renderer.RULER_SIZE / 2);
                 this.context.beginPath();
@@ -198,7 +241,8 @@ export class Renderer {
         }
         this.context.textAlign = 'right';
         for (let y = 0; y < solver.ydim; y++) {
-            const canvasY = Renderer.RULER_SIZE + (solver.ydim - 1 - y + 0.5) * pxPerSquare;
+            const canvasY = Renderer.RULER_SIZE + panY + (solver.ydim - 1 - y + 0.5) * scaledPx;
+            if (canvasY < Renderer.RULER_SIZE || canvasY > this.canvas.height) continue;
             if (y % 10 === 0) {
                 this.context.fillText(y, Renderer.RULER_SIZE - 10, canvasY);
                 this.context.beginPath();
@@ -220,10 +264,10 @@ export class Renderer {
         }
         if (viewState.mouseGridPos && viewState.mouseGridPos.x >= 0 && viewState.mouseGridPos.y >= 0) {
             this.context.fillStyle = 'rgba(255, 100, 100, 0.5)';
-            const trackerX = Renderer.RULER_SIZE + viewState.mouseGridPos.x * pxPerSquare;
-            const trackerY = Renderer.RULER_SIZE + (solver.ydim - 1 - viewState.mouseGridPos.y) * pxPerSquare;
-            this.context.fillRect(trackerX, 0, pxPerSquare, Renderer.RULER_SIZE);
-            this.context.fillRect(0, trackerY, Renderer.RULER_SIZE, pxPerSquare);
+            const trackerX = Renderer.RULER_SIZE + panX + viewState.mouseGridPos.x * scaledPx;
+            const trackerY = Renderer.RULER_SIZE + panY + (solver.ydim - 1 - viewState.mouseGridPos.y) * scaledPx;
+            this.context.fillRect(trackerX, 0, scaledPx, Renderer.RULER_SIZE);
+            this.context.fillRect(0, trackerY, Renderer.RULER_SIZE, scaledPx);
         }
     }
 
@@ -330,6 +374,42 @@ export class Renderer {
         this.context.lineTo(100, -12);
         this.context.lineTo(100, -3);
         this.context.lineTo(0, -3);
+        this.context.closePath();
+        this.context.fill();
+        this.context.restore();
+    }
+
+    /**
+     * @description Desenha a seta arrastável usada para definir direção/velocidade de uma
+     * Entrada recém-desenhada. `vx`/`vy` estão em unidades de velocidade da simulação.
+     */
+    drawDirectionHandle(originX, originY, vx, vy, ydim, pxPerSquare) {
+        const cX = (originX + 0.5) * pxPerSquare;
+        const cY = (ydim - (originY + 0.5)) * pxPerSquare;
+        const VELOCITY_TO_PIXELS = 300;
+        const endX = cX + vx * VELOCITY_TO_PIXELS;
+        const endY = cY - vy * VELOCITY_TO_PIXELS;
+
+        this.context.save();
+        this.context.strokeStyle = '#38bdf8';
+        this.context.fillStyle = '#38bdf8';
+        this.context.lineWidth = 2;
+
+        this.context.beginPath();
+        this.context.arc(cX, cY, 4, 0, 2 * Math.PI);
+        this.context.fill();
+
+        this.context.beginPath();
+        this.context.moveTo(cX, cY);
+        this.context.lineTo(endX, endY);
+        this.context.stroke();
+
+        const angle = Math.atan2(endY - cY, endX - cX);
+        const headLength = 8;
+        this.context.beginPath();
+        this.context.moveTo(endX, endY);
+        this.context.lineTo(endX - headLength * Math.cos(angle - Math.PI / 6), endY - headLength * Math.sin(angle - Math.PI / 6));
+        this.context.lineTo(endX - headLength * Math.cos(angle + Math.PI / 6), endY - headLength * Math.sin(angle + Math.PI / 6));
         this.context.closePath();
         this.context.fill();
         this.context.restore();

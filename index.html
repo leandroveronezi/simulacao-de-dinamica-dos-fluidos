@@ -35,6 +35,10 @@
                     <button id="importButton" class="icon-button" title="Importar Configuração"><i class="fa-solid fa-upload"></i></button>
                     <button id="exportButton" class="icon-button" title="Exportar Configuração"><i class="fa-solid fa-download"></i></button>
                     <button id="screenshotButton" class="icon-button" title="Capturar Tela"><i class="fa-solid fa-camera"></i></button>
+                    <div class="separator"></div>
+                    <button id="zoomOutButton" class="icon-button" title="Diminuir Zoom"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+                    <button id="zoomInButton" class="icon-button" title="Aumentar Zoom"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+                    <button id="resetZoomButton" class="icon-button" title="Redefinir Zoom"><i class="fa-solid fa-compress"></i></button>
                 </div>
             </div>
         </header>
@@ -55,6 +59,8 @@
                     <hr>
                     <button class="tool-button" data-tool="smoke" title="Fumaça / Corante"><i class="fa-solid fa-smog"></i></button>
                     <button class="tool-button" data-tool="select" title="Seleção"><i class="fa-solid fa-vector-square"></i></button>
+                    <hr>
+                    <button class="tool-button" data-tool="pan" title="Mover (pan)"><i class="fa-solid fa-hand"></i></button>
                 </div>
             </aside>
 
@@ -63,6 +69,15 @@
             </div>
 
             <aside id="right-sidebar" class="sidebar">
+                <article id="paint-type-panel">
+                    <h5><i class="fa-solid fa-layer-group"></i> Tipo de Desenho</h5>
+                    <div class="button-grid">
+                        <button class="paint-type-button active" data-paint-type="barrier">Barreira</button>
+                        <button class="paint-type-button" data-paint-type="source">Entrada</button>
+                        <button class="paint-type-button" data-paint-type="sink">Saída</button>
+                    </div>
+                </article>
+
                 <article id="tool-options-panel" hidden>
                     <h5><i class="fa-solid fa-toolbox"></i> Opções da Ferramenta</h5>
                     <div id="spray-options" hidden>
@@ -88,6 +103,12 @@
 
                 <article>
                     <h5><i class="fa-solid fa-sliders"></i> Simulação</h5>
+                    <label for="boundaryModeSelect">Modo de Simulação</label>
+                    <select id="boundaryModeSelect">
+                        <option value="channel" selected>Canal</option>
+                        <option value="open">Mundo Aberto</option>
+                    </select>
+
                     <label for="speedSlider">Velocidade do Fluxo: <span id="speedValue">0.100</span>
                         <i id="speedHelp" class="fas fa-circle-question help-icon" title="Entenda a velocidade"></i>
                     </label>
@@ -104,17 +125,6 @@
                         <option data-viscosity="0.065">Mercúrio</option>
                         <option data-viscosity="0.125">Mel</option>
                         <option data-viscosity="0.175">Óleo de Motor</option>
-                    </select>
-
-                    <label for="sizeSelect">Resolução</label>
-                    <select id="sizeSelect">
-                        <option value="10">Muito Baixa</option>
-                        <option value="8">Baixa</option>
-                        <option value="6">Média</option>
-                        <option value="5" selected>Boa</option>
-                        <option value="4">Alta</option>
-                        <option value="3">Muito Alta</option>
-                        <option value="2">Ultra</option>
                     </select>
 
                     <label for="stepsSlider">Velocidade da Animação</label>
