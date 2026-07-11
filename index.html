@@ -11,6 +11,10 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
     <!-- SweetAlert2 -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <!-- JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 
@@ -25,12 +29,12 @@
                     <button id="stepButton" class="secondary"><i class="fa-solid fa-forward-step"></i> Passo</button>
                     <button id="clearButton" class="contrast"><i class="fa-solid fa-trash-can"></i> Limpar</button>
                     <div class="separator"></div>
-                    <button id="undoButton" title="Desfazer (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
-                    <button id="redoButton" title="Refazer (Ctrl+Y)"><i class="fa-solid fa-rotate-right"></i></button>
+                    <button id="undoButton" class="icon-button" title="Desfazer (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
+                    <button id="redoButton" class="icon-button" title="Refazer (Ctrl+Y)"><i class="fa-solid fa-rotate-right"></i></button>
                     <div class="separator"></div>
-                    <button id="importButton" class="secondary outline" title="Importar Configuração"><i class="fa-solid fa-upload"></i></button>
-                    <button id="exportButton" class="secondary outline" title="Exportar Configuração"><i class="fa-solid fa-download"></i></button>
-                    <button id="screenshotButton" class="secondary outline" title="Capturar Tela"><i class="fa-solid fa-camera"></i></button>
+                    <button id="importButton" class="icon-button" title="Importar Configuração"><i class="fa-solid fa-upload"></i></button>
+                    <button id="exportButton" class="icon-button" title="Exportar Configuração"><i class="fa-solid fa-download"></i></button>
+                    <button id="screenshotButton" class="icon-button" title="Capturar Tela"><i class="fa-solid fa-camera"></i></button>
                 </div>
             </div>
         </header>
@@ -93,6 +97,14 @@
                         <i id="viscosityHelp" class="fas fa-circle-question help-icon" title="Valores de referência"></i>
                     </label>
                     <input id="viscSlider" type="range" min="0.005" max="0.2" step="0.005" value="0.02">
+                    <select id="viscosityPresetSelect">
+                        <option>Selecionar fluido</option>
+                        <option data-viscosity="0.015">Ar</option>
+                        <option data-viscosity="0.030">Água</option>
+                        <option data-viscosity="0.065">Mercúrio</option>
+                        <option data-viscosity="0.125">Mel</option>
+                        <option data-viscosity="0.175">Óleo de Motor</option>
+                    </select>
 
                     <label for="sizeSelect">Resolução</label>
                     <select id="sizeSelect">
@@ -110,13 +122,6 @@
                     <small>Passos/segundo: <span id="speedReadout">0</span></small>
                 </article>
 
-                <article>
-                    <h5><i class="fa-solid fa-shapes"></i> Formas</h5>
-                    <select id="barrierSelect">
-                        <option>Selecionar forma</option>
-                    </select>
-                    <button id="importCoordsButton" class="secondary outline"><i class="fa-solid fa-paste"></i> Importar Coordenadas</button>
-                </article>
                 <article>
                     <h5><i class="fa-solid fa-eye"></i> Visualização</h5>
                     <label for="plotSelect">Exibir
