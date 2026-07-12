@@ -949,6 +949,7 @@ export class FluidSimulationApp {
     }
     clearBarriers() {
         this.solver.cellType.fill(FluidSolver.CELL_TYPE.NORMAL);
+        this.solver.invalidateSinkDamping();
         this.solver.dyeSources = [];
         this.initFluid();
     }
@@ -1168,6 +1169,7 @@ export class FluidSimulationApp {
         this.solver.sourceVx = state.sourceVx.slice();
         this.solver.sourceVy = state.sourceVy.slice();
         this.solver.dyeSources = JSON.parse(JSON.stringify(state.dyeSources));
+        this.solver.invalidateSinkDamping();
         this.initFluid();
     }
     _saveState() {
@@ -1255,6 +1257,7 @@ export class FluidSimulationApp {
         this.solver.cellType = Uint8Array.from(config.cellTypes);
         if (config.sourceVx) this.solver.sourceVx = Float32Array.from(config.sourceVx);
         if (config.sourceVy) this.solver.sourceVy = Float32Array.from(config.sourceVy);
+        this.solver.invalidateSinkDamping();
         this.solver.dyeSources = config.dyeSources || [];
         this.initFluid();
         this.solver.initTracers(this.tracerCheck.checked);

@@ -14,6 +14,9 @@ export class FluidSolver {
     static N_TRACERS = 144;
     static MAX_DYE_TRACERS = 4000;
     static PARTICLES_PER_FRAME_EMISSION = 10;
+    static SINK_RAMP_CELLS = 8;
+    static SINK_MAX_DAMPING = 0.9;
+    static SINK_TARGET_RHO = 0.97;
 
     constructor(xdim, ydim) {
         // Pesos do modelo LBM D2Q9
@@ -64,6 +67,8 @@ export class FluidSolver {
         this.cellType = new Uint8Array(size);
         this.sourceVx = new Float32Array(size);
         this.sourceVy = new Float32Array(size);
+        this.sinkDamping = new Float32Array(size);
+        this._sinkGeometryDirty = true;
         this.dyeSources = [];
 
         this.sensorX = Math.round(xdim / 2);
@@ -82,9 +87,19 @@ export class FluidSolver {
     setCell(x, y, type) {
         if (x >= 0 && x < this.xdim && y >= 0 && y < this.ydim) {
             this.cellType[x + y * this.xdim] = type;
+            this._sinkGeometryDirty = true;
             return true;
         }
         return false;
+    }
+
+    /**
+     * @description Marca a geometria das Saídas como desatualizada, forçando o recálculo do
+     * amortecimento em rampa no próximo passo. Chamar sempre que `cellType` for substituído
+     * diretamente (undo/redo, importar configuração) sem passar por `setCell`.
+     */
+    invalidateSinkDamping() {
+        this._sinkGeometryDirty = true;
     }
 
     setEquilibrium(x, y, newux, newuy, newrho) {
@@ -157,6 +172,10 @@ export class FluidSolver {
         viscosity,
         moveTracers
     }) {
+        if (this._sinkGeometryDirty) {
+            this._recomputeSinkDamping();
+            this._sinkGeometryDirty = false;
+        }
         this.collide(viscosity);
         this.stream();
         this.setBoundaries(u0);
@@ -164,6 +183,71 @@ export class FluidSolver {
         if (moveTracers) this.moveTracers();
         this.moveDyeTracers();
         this._emitNewDyeTracers();
+    }
+
+    /**
+     * @private
+     * @description Calcula, para cada célula SINK, o quão "profunda" ela está dentro da
+     * região de Saída (distância em células até a borda mais próxima que não é Saída, via
+     * BFS a partir das bordas). Uma Saída fina (1 célula) fica toda na profundidade 1 — pouco
+     * amortecimento, quase transparente. Uma Saída grossa tem células mais profundas no meio,
+     * com amortecimento crescendo em rampa até `SINK_MAX_DAMPING`. Essa rampa gradual (em vez
+     * de um corte abrupto) é o que evita a célula se comportar como um obstáculo que desvia o
+     * fluxo, mesmo assim absorvendo energia/massa de verdade em regiões mais espessas.
+     */
+    _recomputeSinkDamping() {
+        const size = this.xdim * this.ydim;
+        if (this.sinkDamping.length !== size) {
+            this.sinkDamping = new Float32Array(size);
+        } else {
+            this.sinkDamping.fill(0);
+        }
+
+        const depth = new Int32Array(size).fill(-1);
+        const queue = [];
+        const isSink = (i) => this.cellType[i] === FluidSolver.CELL_TYPE.SINK;
+
+        for (let y = 0; y < this.ydim; y++) {
+            for (let x = 0; x < this.xdim; x++) {
+                const i = x + y * this.xdim;
+                if (!isSink(i)) continue;
+                const hasNonSinkNeighbor =
+                    x === 0 || x === this.xdim - 1 || y === 0 || y === this.ydim - 1 ||
+                    !isSink(i - 1) || !isSink(i + 1) || !isSink(i - this.xdim) || !isSink(i + this.xdim);
+                if (hasNonSinkNeighbor) {
+                    depth[i] = 1;
+                    queue.push(i);
+                }
+            }
+        }
+
+        let qi = 0;
+        while (qi < queue.length) {
+            const i = queue[qi++];
+            const x = i % this.xdim,
+                y = Math.floor(i / this.xdim);
+            const neighbors = [
+                [x - 1, y],
+                [x + 1, y],
+                [x, y - 1],
+                [x, y + 1]
+            ];
+            for (const [nx, ny] of neighbors) {
+                if (nx < 0 || nx >= this.xdim || ny < 0 || ny >= this.ydim) continue;
+                const ni = nx + ny * this.xdim;
+                if (!isSink(ni) || depth[ni] !== -1) continue;
+                depth[ni] = depth[i] + 1;
+                queue.push(ni);
+            }
+        }
+
+        const RAMP = FluidSolver.SINK_RAMP_CELLS;
+        const MAX_DAMPING = FluidSolver.SINK_MAX_DAMPING;
+        for (let i = 0; i < size; i++) {
+            if (depth[i] > 0) {
+                this.sinkDamping[i] = Math.min(MAX_DAMPING, (depth[i] / RAMP) * MAX_DAMPING);
+            }
+        }
     }
 
     /**
@@ -243,8 +327,14 @@ export class FluidSolver {
 
     /**
      * @private
-     * @description Impõe a velocidade das células SOURCE (entradas pintadas) e relaxa as
-     * células SINK (saídas pintadas) de volta ao estado de repouso, absorvendo o fluido local.
+     * @description Impõe a velocidade das células SOURCE (entradas pintadas) e modela as
+     * células SINK (saídas) como um poço de baixa pressão: a densidade é puxada em rampa até
+     * `SINK_TARGET_RHO`, mas a velocidade local NÃO é tocada. Amortecer a velocidade (versão
+     * anterior) faz a célula resistir ao que chega, e qualquer região resistiva que não
+     * atravesse o domínio de parede a parede faz o fluxo desviar pelas bordas livres — o mesmo
+     * efeito de um obstáculo. Reduzir só a densidade cria um gradiente de pressão real que o
+     * próprio `collide()`/`stream()` já usa para puxar o fluido vizinho para dentro (sucção),
+     * em vez de empurrá-lo para os lados.
      */
     _applySourcesAndSinks() {
         for (let i = 0; i < this.xdim * this.ydim; i++) {
@@ -253,9 +343,12 @@ export class FluidSolver {
                     y = Math.floor(i / this.xdim);
                 this.setEquilibrium(x, y, this.sourceVx[i], this.sourceVy[i], 1);
             } else if (this.cellType[i] === FluidSolver.CELL_TYPE.SINK) {
+                const damping = this.sinkDamping[i];
+                if (damping <= 0) continue;
                 const x = i % this.xdim,
                     y = Math.floor(i / this.xdim);
-                this.setEquilibrium(x, y, 0, 0, 1);
+                const newRho = this.rho[i] - (this.rho[i] - FluidSolver.SINK_TARGET_RHO) * damping;
+                this.setEquilibrium(x, y, this.ux[i], this.uy[i], newRho);
             }
         }
     }
