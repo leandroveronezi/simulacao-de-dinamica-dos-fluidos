@@ -18,6 +18,7 @@ export class FluidSolver {
     static SINK_RAMP_CELLS = 8;
     static SINK_MAX_DAMPING = 0.9;
     static SINK_TARGET_RHO = 0.97;
+    static ROTOR_MAX_TIP_SPEED = 0.15;
 
     constructor(xdim, ydim) {
         // Pesos do modelo LBM D2Q9
@@ -72,6 +73,10 @@ export class FluidSolver {
         this._sinkGeometryDirty = true;
         this.dyeSources = [];
         this.rotatingBodies = [];
+        this.rotorWallVx = new Float32Array(size);
+        this.rotorWallVy = new Float32Array(size);
+        this.rotorBodyIndex = new Int32Array(size).fill(-1);
+        this._rotorTorqueAccum = new Float64Array(0);
 
         this.sensorX = Math.round(xdim / 2);
         this.sensorY = Math.round(ydim / 2);
@@ -208,20 +213,18 @@ export class FluidSolver {
      * fórmula de "momentum exchange" já usada para a força global em barreiras, somada só nas
      * células deste corpo), integra ângulo/velocidade angular (torque motor - amortecimento -
      * mola de retorno a `restingAngle`; rigidez 0 = turbina livre, >0 = palheta elástica), e
-     * rerrasteriza a forma na nova posição. Roda logo após `stream()` (bounce-back já aplicado,
-     * distribuições pós-choque disponíveis) e antes de `setBoundaries()`.
-     *
-     * Aproximação aceita: bounce-back estático não injeta a velocidade da própria parede em
-     * movimento (correção clássica de "moving wall" em LBM) — o fluido aplica torque
-     * corretamente no corpo, mas o giro não "sopra" o fluido adjacente além do que a forma
-     * estática naquele instante já causaria. Suficiente para fluido→objeto; não é fluido⇄objeto
-     * bidirecional completo.
+     * rerrasteriza a forma na nova posição, atualizando `rotorWallVx/Vy` (velocidade local da
+     * "parede" de cada célula, usada pelo bounce-back de parede em movimento em `stream()` — é
+     * isso que faz o Rotor realmente soprar/arrastar o fluido adjacente, não só receber torque
+     * dele). Roda logo após `stream()` (bounce-back já aplicado, distribuições pós-choque
+     * disponíveis) e antes de `setBoundaries()`.
      */
     _updateRotatingBodies(massMultiplier, damping, stiffness) {
         const xdim = this.xdim,
             ydim = this.ydim;
         const survivingBodies = [];
-        for (const body of this.rotatingBodies) {
+        for (let oldIndex = 0; oldIndex < this.rotatingBodies.length; oldIndex++) {
+            const body = this.rotatingBodies[oldIndex];
             // Um corpo cujas células foram todas apagadas por fora (borracha, apagar seleção,
             // "Limpar") não deve continuar sendo simulado/rerrasterizado — do contrário ele
             // "reaparece" sozinho no próximo passo mesmo tendo sido apagado da tela.
@@ -232,26 +235,21 @@ export class FluidSolver {
             if (!stillExists) continue;
             survivingBodies.push(body);
 
-            let torque = 0;
-            for (const {
-                    x,
-                    y
-                } of body.currentCells) {
-                const i = x + y * xdim;
-                // Mesma fórmula de "momentum exchange" de `barrierFx/Fy`, mas com o sinal
-                // invertido: empiricamente, `barrierFx` já existente dá NEGATIVO para uma
-                // barreira parada sendo empurrada por um fluxo no sentido +x (testado
-                // isoladamente) — ou seja, essa convenção antiga não é "força sobre o sólido no
-                // sentido +x/+y", é o oposto. Pro torque fazer sentido físico (girar pro lado
-                // que a intuição espera), aqui usamos a força com o sinal corrigido.
-                const fx = -2 * (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]);
-                const fy = -2 * (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]);
-                torque += (x - body.pivotX) * fy - (y - body.pivotY) * fx;
-            }
+            // Torque já foi medido em `stream()` (usando `oldIndex`, a indexação de
+            // `this.rotatingBodies` como estava ANTES deste filtro), a partir das distribuições
+            // recém-refletidas — antes de injetar a correção de parede em movimento. Ver o
+            // comentário em `stream()` sobre por que essa separação é obrigatória.
+            const torque = this._rotorTorqueAccum[oldIndex] || 0;
 
             const effectiveInertia = Math.max(1e-6, massMultiplier * body.momentOfInertia);
             body.omega += torque / effectiveInertia - damping * body.omega - stiffness * (body.angle - body.restingAngle);
-            const omegaMax = 1 / body.maxRadius;
+            // Duplo propósito neste limite: (1) geométrico — a forma só é rerrasterizada 1x por
+            // passo, sem sub-stepping, então a ponta não pode saltar mais que uma fração de
+            // célula; (2) estabilidade numérica — a velocidade de ponta (ω×raio) agora também
+            // vira velocidade real injetada no fluido (parede em movimento), então precisa ficar
+            // na mesma faixa de velocidade estável do resto da simulação (ordem de 0.1-0.2),
+            // não perto de 1 como um limite puramente geométrico permitiria.
+            const omegaMax = FluidSolver.ROTOR_MAX_TIP_SPEED / body.maxRadius;
             body.omega = Math.max(-omegaMax, Math.min(omegaMax, body.omega));
             body.angle += body.omega;
 
@@ -286,14 +284,23 @@ export class FluidSolver {
                 const i = x + y * xdim;
                 if (this.cellType[i] !== FluidSolver.CELL_TYPE.ROTOR) continue;
                 this.cellType[i] = FluidSolver.CELL_TYPE.NORMAL;
+                this.rotorWallVx[i] = 0;
+                this.rotorWallVy[i] = 0;
+                this.rotorBodyIndex[i] = -1;
                 this._refillCell(x, y);
             }
 
+            const newBodyIndex = survivingBodies.length - 1;
             for (const {
                     x,
                     y
                 } of newCells) {
-                this.cellType[x + y * xdim] = FluidSolver.CELL_TYPE.ROTOR;
+                const i = x + y * xdim;
+                this.cellType[i] = FluidSolver.CELL_TYPE.ROTOR;
+                // Velocidade local da "parede" nesta célula: ω×r, r = célula - pivô.
+                this.rotorWallVx[i] = -body.omega * (y - body.pivotY);
+                this.rotorWallVy[i] = body.omega * (x - body.pivotX);
+                this.rotorBodyIndex[i] = newBodyIndex;
             }
 
             body.currentCells = newCells;
@@ -685,13 +692,14 @@ export class FluidSolver {
         this.barrierySum = 0;
         this.barrierFx = 0.0;
         this.barrierFy = 0.0;
+        const torqueAccum = new Float64Array(this.rotatingBodies.length);
 
         for (let i = 0; i < this.xdim * this.ydim; i++) {
             const type = this.cellType[i];
             // ROTOR sofre o mesmo bounce-back que BARRIER (sólido no instante atual), mas não
             // entra no acúmulo global de força/posição — esse acumulador alimenta a seta
             // "Força" existente, que representa obstáculos estáticos; o torque de um corpo
-            // giratório é calculado à parte, por corpo, em `_updateRotatingBodies`.
+            // giratório é acumulado à parte, por corpo (ver `torqueAccum` abaixo).
             if (type === FluidSolver.CELL_TYPE.BARRIER || type === FluidSolver.CELL_TYPE.ROTOR) {
                 // Inverte as direções das distribuições que chegaram ao obstáculo
                 [this.nE[i], this.nW[i]] = [this.nW[i], this.nE[i]];
@@ -708,9 +716,49 @@ export class FluidSolver {
                     this.barrierySum += y;
                     this.barrierFx += 2 * (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]);
                     this.barrierFy += 2 * (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]);
+                } else {
+                    // ROTOR: mede o torque a partir das distribuições recém-refletidas, ANTES de
+                    // injetar a correção de parede em movimento logo abaixo — crítico: medir
+                    // depois da injeção faria o torque "sentir" a própria correção que acabamos
+                    // de aplicar, criando um ciclo de realimentação que trava o corpo oscilando
+                    // (testado e confirmado: sem essa separação, ângulo/velocidade angular
+                    // ficam presos alternando de sinal a cada passo, em vez de girar suave).
+                    const bodyIndex = this.rotorBodyIndex[i];
+                    if (bodyIndex >= 0) {
+                        const body = this.rotatingBodies[bodyIndex];
+                        const x = i % this.xdim,
+                            y = Math.floor(i / this.xdim);
+                        const fx = -2 * (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]);
+                        const fy = -2 * (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]);
+                        torqueAccum[bodyIndex] += (x - body.pivotX) * fy - (y - body.pivotY) * fx;
+                    }
+
+                    // Correção clássica de "parede em movimento" do LBM — injeta a velocidade
+                    // local da própria pá (rotorWallVx/Vy = ω×r) nas populações refletidas, em
+                    // vez de tratar a célula como parede parada naquele instante. Sem isso o
+                    // Rotor recebe torque do fluido corretamente, mas nunca sopra/arrasta o
+                    // fluido adjacente com sua própria rotação.
+                    const wallVx = this.rotorWallVx[i];
+                    const wallVy = this.rotorWallVy[i];
+                    if (wallVx !== 0 || wallVy !== 0) {
+                        const rho = this.rho[i];
+                        const corrE = (2 / 3) * rho * wallVx;
+                        const corrN = (2 / 3) * rho * wallVy;
+                        const corrNE = (1 / 6) * rho * (wallVx + wallVy);
+                        const corrNW = (1 / 6) * rho * (-wallVx + wallVy);
+                        this.nE[i] += corrE;
+                        this.nW[i] -= corrE;
+                        this.nN[i] += corrN;
+                        this.nS[i] -= corrN;
+                        this.nNE[i] += corrNE;
+                        this.nSW[i] -= corrNE;
+                        this.nNW[i] += corrNW;
+                        this.nSE[i] -= corrNW;
+                    }
                 }
             }
         }
+        this._rotorTorqueAccum = torqueAccum;
     }
 
     computeCurl() {
