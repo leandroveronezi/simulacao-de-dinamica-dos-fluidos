@@ -182,6 +182,7 @@ export class Renderer {
         this.context.drawImage(this.offscreenCanvas, 0, 0);
         this.drawDyeSources(solver, pxPerSquare);
         this.drawDyeTracers(solver, pxPerSquare);
+        this.drawRotorPivots(solver, pxPerSquare);
         if (viewState.showTracers) this.drawTracers(solver, pxPerSquare);
         if (viewState.showForce && solver.barrierCount > 0) {
             this.drawForceArrow(
@@ -332,6 +333,27 @@ export class Renderer {
         for (let t = 0; t < FluidSolver.N_TRACERS; t++) {
             const cX = (solver.tracerX[t] + 0.5) * pxPerSquare;
             const cY = (solver.ydim - (solver.tracerY[t] + 0.5)) * pxPerSquare;
+            this.context.beginPath();
+            this.context.arc(cX, cY, radius, 0, 2 * Math.PI);
+            this.context.fill();
+            this.context.stroke();
+        }
+    }
+
+    /**
+     * @description Marca o pivô de cada corpo giratório com um pontinho — puramente visual,
+     * lido de `body.pivotX/pivotY` (nunca gravado em `cellType`), então não interfere na física
+     * nem bloqueia traçadores/fumaça.
+     */
+    drawRotorPivots(solver, pxPerSquare) {
+        if (!solver.rotatingBodies || solver.rotatingBodies.length === 0) return;
+        const radius = Math.max(2, pxPerSquare * 0.35);
+        this.context.fillStyle = "rgba(167, 139, 250, 0.95)";
+        this.context.strokeStyle = "rgba(255, 255, 255, 0.9)";
+        this.context.lineWidth = 1;
+        for (const body of solver.rotatingBodies) {
+            const cX = (body.pivotX + 0.5) * pxPerSquare;
+            const cY = (solver.ydim - (body.pivotY + 0.5)) * pxPerSquare;
             this.context.beginPath();
             this.context.arc(cX, cY, radius, 0, 2 * Math.PI);
             this.context.fill();
