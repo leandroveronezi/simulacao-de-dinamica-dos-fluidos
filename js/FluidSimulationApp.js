@@ -63,6 +63,13 @@ export class FluidSimulationApp {
         this.viscValue = this.root.querySelector('#viscValue');
         this.viscosityPresetSelect = this.root.querySelector('#viscosityPresetSelect');
         this.viscosityHelp = this.root.querySelector('#viscosityHelp');
+        this.rotorMassSlider = this.root.querySelector('#rotorMassSlider');
+        this.rotorMassValue = this.root.querySelector('#rotorMassValue');
+        this.rotorDampingSlider = this.root.querySelector('#rotorDampingSlider');
+        this.rotorDampingValue = this.root.querySelector('#rotorDampingValue');
+        this.rotorStiffnessSlider = this.root.querySelector('#rotorStiffnessSlider');
+        this.rotorStiffnessValue = this.root.querySelector('#rotorStiffnessValue');
+        this.rotorStiffnessHelp = this.root.querySelector('#rotorStiffnessHelp');
         this.visualizationHelp = this.root.querySelector('#visualizationHelp');
         this.plotSelect = this.root.querySelector('#plotSelect');
         this.contrastSlider = this.root.querySelector('#contrastSlider');
@@ -123,10 +130,12 @@ export class FluidSimulationApp {
         this.panStart = null;
         this.activePaintType = 'barrier';
         this.pendingSourceCells = null;
+        this.pendingRotorCells = null;
         this.awaitingDirectionDrag = false;
         this.directionDragOrigin = null;
         this.directionDragVx = 0;
         this.directionDragVy = 0;
+        this.awaitingPivotClick = false;
     }
 
     /**
@@ -176,6 +185,16 @@ export class FluidSimulationApp {
         });
         this.viscSlider.addEventListener('input', () => this.adjustViscosity());
         this.viscosityPresetSelect.addEventListener('change', () => this._applyViscosityPreset());
+        this.rotorMassSlider.addEventListener('input', () => {
+            this.rotorMassValue.innerHTML = Number(this.rotorMassSlider.value).toFixed(1);
+        });
+        this.rotorDampingSlider.addEventListener('input', () => {
+            this.rotorDampingValue.innerHTML = Number(this.rotorDampingSlider.value).toFixed(3);
+        });
+        this.rotorStiffnessSlider.addEventListener('input', () => {
+            this.rotorStiffnessValue.innerHTML = Number(this.rotorStiffnessSlider.value).toFixed(3);
+        });
+        this.rotorStiffnessHelp.addEventListener('click', () => this._showRotorStiffnessHelp());
         this.plotSelect.addEventListener('change', () => {
             this._requestPaint();
         });
@@ -213,6 +232,7 @@ export class FluidSimulationApp {
             }
             if (e.key === 'Escape') {
                 if (this.awaitingDirectionDrag) this._cancelDirectionDrag();
+                if (this.awaitingPivotClick) this._cancelPivotClick();
                 if (this.clipboard) this._clearClipboard();
                 if (this.selectionArea) this._clearSelection();
             }
@@ -427,6 +447,8 @@ export class FluidSimulationApp {
                 return FluidSolver.CELL_TYPE.SOURCE;
             case 'sink':
                 return FluidSolver.CELL_TYPE.SINK;
+            case 'rotor':
+                return FluidSolver.CELL_TYPE.ROTOR;
             default:
                 return FluidSolver.CELL_TYPE.BARRIER;
         }
@@ -453,6 +475,14 @@ export class FluidSimulationApp {
             return;
         }
 
+        if (this.awaitingPivotClick) {
+            this.solver.addRotatingBody(this.pendingRotorCells, gridLoc);
+            this.awaitingPivotClick = false;
+            this.pendingRotorCells = null;
+            this._requestPaint();
+            return;
+        }
+
         if (this.clipboard) {
             this._pasteSelection(gridLoc);
             return;
@@ -461,6 +491,7 @@ export class FluidSimulationApp {
         this.mouseIsDown = true;
         this.toolStartPoint = gridLoc;
         if (this.activePaintType === 'source') this.pendingSourceCells = [];
+        if (this.activePaintType === 'rotor') this.pendingRotorCells = [];
 
         if (this.sensorCheck.checked && gridLoc.x >= 0 && gridLoc.y >= 0) {
             const dx = (gridLoc.x - this.solver.sensorX) * this.pxPerSquare;
@@ -606,6 +637,12 @@ export class FluidSimulationApp {
             this.pendingSourceCells = null;
         }
 
+        if (this.activePaintType === 'rotor' && this.pendingRotorCells && this.pendingRotorCells.length > 0) {
+            this.awaitingPivotClick = true;
+        } else {
+            this.pendingRotorCells = null;
+        }
+
         this._requestPaint();
         this.mouseIsDown = false;
         this.draggingSensor = false;
@@ -672,6 +709,18 @@ export class FluidSimulationApp {
         this.awaitingDirectionDrag = false;
         this.pendingSourceCells = null;
         this.directionDragOrigin = null;
+        this._requestPaint();
+    }
+
+    /**
+     * @private
+     * @description Cancela o Rotor sendo definido (Esc): desfaz a forma recém-desenhada, antes
+     * de o usuário clicar pra fixar o pivô.
+     */
+    _cancelPivotClick() {
+        this.undo();
+        this.awaitingPivotClick = false;
+        this.pendingRotorCells = null;
         this._requestPaint();
     }
     _applySpray(center) {
@@ -846,11 +895,17 @@ export class FluidSimulationApp {
         const u0 = Number(this.speedSlider.value);
         const viscosity = Number(this.viscSlider.value);
         const moveTracers = this.tracerCheck.checked;
+        const rotorMassMultiplier = Number(this.rotorMassSlider.value);
+        const rotorDamping = Number(this.rotorDampingSlider.value);
+        const rotorStiffness = Number(this.rotorStiffnessSlider.value);
         for (let s = 0; s < stepsPerFrame; s++) {
             this.solver.step({
                 u0,
                 viscosity,
-                moveTracers
+                moveTracers,
+                rotorMassMultiplier,
+                rotorDamping,
+                rotorStiffness
             });
             this.time++;
         }
@@ -890,7 +945,10 @@ export class FluidSimulationApp {
         this.solver.step({
             u0: Number(this.speedSlider.value),
             viscosity: Number(this.viscSlider.value),
-            moveTracers: this.tracerCheck.checked
+            moveTracers: this.tracerCheck.checked,
+            rotorMassMultiplier: Number(this.rotorMassSlider.value),
+            rotorDamping: Number(this.rotorDampingSlider.value),
+            rotorStiffness: Number(this.rotorStiffnessSlider.value)
         });
         this._requestPaint();
     }
@@ -971,6 +1029,7 @@ export class FluidSimulationApp {
         this.solver.cellType.fill(FluidSolver.CELL_TYPE.NORMAL);
         this.solver.invalidateSinkDamping();
         this.solver.dyeSources = [];
+        this.solver.rotatingBodies = [];
         this.initFluid();
     }
 
@@ -994,7 +1053,7 @@ export class FluidSimulationApp {
         for (let x = bounds.x_start; x <= bounds.x_end; x++) {
             for (let y = bounds.y_start; y <= bounds.y_end; y++) {
                 const type = this.solver.cellType[x + y * this.solver.xdim];
-                if (type !== FluidSolver.CELL_TYPE.NORMAL) {
+                if (type !== FluidSolver.CELL_TYPE.NORMAL && type !== FluidSolver.CELL_TYPE.ROTOR) {
                     cells.push({
                         x: x - bounds.x_start,
                         y: y - bounds.y_start,
@@ -1046,7 +1105,7 @@ export class FluidSimulationApp {
         for (let x = bounds.x_start; x <= bounds.x_end; x++) {
             for (let y = bounds.y_start; y <= bounds.y_end; y++) {
                 const type = this.solver.cellType[x + y * this.solver.xdim];
-                if (type !== FluidSolver.CELL_TYPE.NORMAL) {
+                if (type !== FluidSolver.CELL_TYPE.NORMAL && type !== FluidSolver.CELL_TYPE.ROTOR) {
                     const dx = x - centerX;
                     const dy = y - centerY;
                     let newX, newY;
@@ -1084,7 +1143,7 @@ export class FluidSimulationApp {
         for (let x = bounds.x_start; x <= bounds.x_end; x++) {
             for (let y = bounds.y_start; y <= bounds.y_end; y++) {
                 const type = this.solver.cellType[x + y * this.solver.xdim];
-                if (type !== FluidSolver.CELL_TYPE.NORMAL) {
+                if (type !== FluidSolver.CELL_TYPE.NORMAL && type !== FluidSolver.CELL_TYPE.ROTOR) {
                     const {
                         newX,
                         newY
@@ -1126,6 +1185,13 @@ export class FluidSimulationApp {
         Swal.fire({
             title: 'Valores de Referência de Viscosidade',
             html: `<p>A viscosidade nesta simulação é um parâmetro adimensional. Use os valores abaixo como ponto de partida.</p><table><thead><tr><th>Fluido (a 20°C)</th><th>Viscosidade (Aprox.)</th></tr></thead><tbody><tr><td>Ar</td><td>0.010 - 0.020</td></tr><tr><td>Água</td><td>0.020 - 0.040</td></tr><tr><td>Mercúrio</td><td>0.050 - 0.080</td></tr><tr><td>Mel</td><td>0.100 - 0.150</td></tr><tr><td>Óleo de Motor</td><td>0.150 - 0.200</td></tr></tbody></table><small>Fonte: Valores adaptados para esta simulação. Para dados reais, consulte <a href="https://www.engineersedge.com/fluid_flow/kinematic-viscosity-table.htm" target="_blank">recursos de engenharia</a>.</small>`,
+            icon: 'info'
+        });
+    }
+    _showRotorStiffnessHelp() {
+        Swal.fire({
+            title: 'Rigidez da Mola',
+            html: `<p>Controla se um Rotor gira livremente ou balança e volta a uma posição de repouso.</p><ul><li><strong>0</strong>: turbina livre — gira sem parar enquanto o fluido empurrar.</li><li><strong>Maior que 0</strong>: palheta elástica — o fluido a deflete, e ao parar (ou mudar de direção) ela balança de volta ao ângulo em que foi desenhada.</li></ul><small>Quanto maior o valor, mais rígida a "mola" — a palheta deflete menos e volta mais rápido.</small>`,
             icon: 'info'
         });
     }
@@ -1172,6 +1238,9 @@ export class FluidSimulationApp {
             if (type === FluidSolver.CELL_TYPE.SOURCE && this.pendingSourceCells) {
                 this.pendingSourceCells.push({ x, y });
             }
+            if (type === FluidSolver.CELL_TYPE.ROTOR && this.pendingRotorCells) {
+                this.pendingRotorCells.push({ x, y });
+            }
             this._requestPaint();
         }
     }
@@ -1181,7 +1250,8 @@ export class FluidSimulationApp {
             cellTypes: this.solver.cellType.slice(),
             sourceVx: this.solver.sourceVx.slice(),
             sourceVy: this.solver.sourceVy.slice(),
-            dyeSources: JSON.parse(JSON.stringify(this.solver.dyeSources))
+            dyeSources: JSON.parse(JSON.stringify(this.solver.dyeSources)),
+            rotatingBodies: JSON.parse(JSON.stringify(this.solver.rotatingBodies))
         };
     }
     _restoreState(state) {
@@ -1189,6 +1259,7 @@ export class FluidSimulationApp {
         this.solver.sourceVx = state.sourceVx.slice();
         this.solver.sourceVy = state.sourceVy.slice();
         this.solver.dyeSources = JSON.parse(JSON.stringify(state.dyeSources));
+        this.solver.rotatingBodies = JSON.parse(JSON.stringify(state.rotatingBodies || []));
         this.solver.invalidateSinkDamping();
         this.initFluid();
     }
@@ -1216,7 +1287,7 @@ export class FluidSimulationApp {
 
     _exportConfiguration() {
         const config = {
-            version: 14,
+            version: 15,
             xdim: this.solver.xdim,
             ydim: this.solver.ydim,
             boundaryMode: this.solver.boundaryMode,
@@ -1224,6 +1295,7 @@ export class FluidSimulationApp {
             sourceVx: Array.from(this.solver.sourceVx),
             sourceVy: Array.from(this.solver.sourceVy),
             dyeSources: this.solver.dyeSources,
+            rotatingBodies: this.solver.rotatingBodies,
             flowSpeed: this.speedSlider.value,
             viscosity: this.viscSlider.value,
             animationSpeed: this.stepsSlider.value,
@@ -1253,7 +1325,7 @@ export class FluidSimulationApp {
             reader.onload = event => {
                 try {
                     const config = JSON.parse(event.target.result);
-                    if (config.version < 14) throw new Error('Formato de arquivo antigo ou incompatível (não guarda o tamanho da grade). Exporte novamente.');
+                    if (config.version < 15) throw new Error('Formato de arquivo antigo ou incompatível (não guarda o tamanho da grade/objetos giratórios). Exporte novamente.');
                     this._applyConfiguration(config);
                 } catch (err) {
                     Swal.fire('Erro', `Não foi possível importar a configuração: ${err.message}`, 'error');
@@ -1281,6 +1353,7 @@ export class FluidSimulationApp {
         if (config.sourceVy) this.solver.sourceVy = Float32Array.from(config.sourceVy);
         this.solver.invalidateSinkDamping();
         this.solver.dyeSources = config.dyeSources || [];
+        this.solver.rotatingBodies = config.rotatingBodies || [];
         this.initFluid();
         this.solver.initTracers(this.tracerCheck.checked);
         this.solver.initDyeTracers();

@@ -114,6 +114,10 @@ export class Renderer {
                     r = 255;
                     g = 93;
                     b = 93;
+                } else if (solver.cellType[index] === FluidSolver.CELL_TYPE.ROTOR) {
+                    r = 167;
+                    g = 139;
+                    b = 250;
                 } else {
                     let value;
                     switch (plotType) {

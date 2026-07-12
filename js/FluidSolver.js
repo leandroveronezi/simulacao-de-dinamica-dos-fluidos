@@ -8,7 +8,8 @@ export class FluidSolver {
         NORMAL: 0,
         BARRIER: 1,
         SOURCE: 2,
-        SINK: 3
+        SINK: 3,
+        ROTOR: 4
     });
 
     static N_TRACERS = 144;
@@ -70,6 +71,7 @@ export class FluidSolver {
         this.sinkDamping = new Float32Array(size);
         this._sinkGeometryDirty = true;
         this.dyeSources = [];
+        this.rotatingBodies = [];
 
         this.sensorX = Math.round(xdim / 2);
         this.sensorY = Math.round(ydim / 2);
@@ -100,6 +102,203 @@ export class FluidSolver {
      */
     invalidateSinkDamping() {
         this._sinkGeometryDirty = true;
+    }
+
+    /**
+     * @description Registra um novo corpo giratório a partir das células já pintadas como
+     * ROTOR (a forma em si é desenhada pelas ferramentas normais, via `setCell`). Se `pivot`
+     * não for informado, usa o centróide das células desenhadas; passando `pivot` explícito
+     * (ex.: um clique do usuário depois de desenhar a forma), o eixo de rotação fica onde o
+     * usuário escolher, não necessariamente no centro da forma. O momento de inércia é
+     * derivado da própria forma (soma de dx²+dy² a partir do pivô, "massa" unitária por
+     * célula) em vez de ser uma constante global — do contrário uma turbina grande e uma
+     * palheta pequena não teriam como conviver com o mesmo ajuste de sensibilidade.
+     */
+    addRotatingBody(cells, pivot) {
+        if (!cells || cells.length === 0) return;
+        let pivotX, pivotY;
+        if (pivot) {
+            pivotX = pivot.x;
+            pivotY = pivot.y;
+        } else {
+            let sumX = 0,
+                sumY = 0;
+            for (const {
+                    x,
+                    y
+                } of cells) {
+                sumX += x;
+                sumY += y;
+            }
+            pivotX = sumX / cells.length;
+            pivotY = sumY / cells.length;
+        }
+        let momentOfInertia = 0;
+        let maxRadius = 0;
+        const localCells = cells.map(({
+            x,
+            y
+        }) => {
+            const dx = x - pivotX,
+                dy = y - pivotY;
+            momentOfInertia += dx * dx + dy * dy;
+            maxRadius = Math.max(maxRadius, Math.sqrt(dx * dx + dy * dy));
+            return {
+                dx,
+                dy
+            };
+        });
+        this.rotatingBodies.push({
+            pivotX,
+            pivotY,
+            localCells,
+            currentCells: cells.map(c => ({
+                x: c.x,
+                y: c.y
+            })),
+            angle: 0,
+            omega: 0,
+            restingAngle: 0,
+            momentOfInertia: Math.max(1, momentOfInertia),
+            maxRadius: Math.max(1, maxRadius)
+        });
+    }
+
+    /**
+     * @private
+     * @description Reconstrói o estado de fluido de uma célula recém-liberada por um corpo
+     * giratório (deixou de ser ROTOR). Uma célula assim não tem histórico de distribuições
+     * coerente, então em vez de um equilíbrio ambiente fixo (errado perto de Entradas/modo
+     * aberto), usa a média de rho/velocidade dos vizinhos ortogonais não-sólidos, caindo pro
+     * ambiente parado só se todos os vizinhos também forem sólidos.
+     */
+    _refillCell(x, y) {
+        const xdim = this.xdim,
+            ydim = this.ydim;
+        const neighbors = [
+            [x - 1, y],
+            [x + 1, y],
+            [x, y - 1],
+            [x, y + 1]
+        ];
+        let sumRho = 0,
+            sumUx = 0,
+            sumUy = 0,
+            count = 0;
+        for (const [nx, ny] of neighbors) {
+            if (nx < 0 || nx >= xdim || ny < 0 || ny >= ydim) continue;
+            const ni = nx + ny * xdim;
+            const t = this.cellType[ni];
+            if (t === FluidSolver.CELL_TYPE.BARRIER || t === FluidSolver.CELL_TYPE.ROTOR) continue;
+            sumRho += this.rho[ni];
+            sumUx += this.ux[ni];
+            sumUy += this.uy[ni];
+            count++;
+        }
+        if (count > 0) {
+            this.setEquilibrium(x, y, sumUx / count, sumUy / count, sumRho / count);
+        } else {
+            this.setEquilibrium(x, y, 0, 0, 1);
+        }
+    }
+
+    /**
+     * @private
+     * @description Atualiza cada corpo giratório: calcula o torque exercido pelo fluido (mesma
+     * fórmula de "momentum exchange" já usada para a força global em barreiras, somada só nas
+     * células deste corpo), integra ângulo/velocidade angular (torque motor - amortecimento -
+     * mola de retorno a `restingAngle`; rigidez 0 = turbina livre, >0 = palheta elástica), e
+     * rerrasteriza a forma na nova posição. Roda logo após `stream()` (bounce-back já aplicado,
+     * distribuições pós-choque disponíveis) e antes de `setBoundaries()`.
+     *
+     * Aproximação aceita: bounce-back estático não injeta a velocidade da própria parede em
+     * movimento (correção clássica de "moving wall" em LBM) — o fluido aplica torque
+     * corretamente no corpo, mas o giro não "sopra" o fluido adjacente além do que a forma
+     * estática naquele instante já causaria. Suficiente para fluido→objeto; não é fluido⇄objeto
+     * bidirecional completo.
+     */
+    _updateRotatingBodies(massMultiplier, damping, stiffness) {
+        const xdim = this.xdim,
+            ydim = this.ydim;
+        const survivingBodies = [];
+        for (const body of this.rotatingBodies) {
+            // Um corpo cujas células foram todas apagadas por fora (borracha, apagar seleção,
+            // "Limpar") não deve continuar sendo simulado/rerrasterizado — do contrário ele
+            // "reaparece" sozinho no próximo passo mesmo tendo sido apagado da tela.
+            const stillExists = body.currentCells.some(({
+                x,
+                y
+            }) => this.cellType[x + y * xdim] === FluidSolver.CELL_TYPE.ROTOR);
+            if (!stillExists) continue;
+            survivingBodies.push(body);
+
+            let torque = 0;
+            for (const {
+                    x,
+                    y
+                } of body.currentCells) {
+                const i = x + y * xdim;
+                // Mesma fórmula de "momentum exchange" de `barrierFx/Fy`, mas com o sinal
+                // invertido: empiricamente, `barrierFx` já existente dá NEGATIVO para uma
+                // barreira parada sendo empurrada por um fluxo no sentido +x (testado
+                // isoladamente) — ou seja, essa convenção antiga não é "força sobre o sólido no
+                // sentido +x/+y", é o oposto. Pro torque fazer sentido físico (girar pro lado
+                // que a intuição espera), aqui usamos a força com o sinal corrigido.
+                const fx = -2 * (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]);
+                const fy = -2 * (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]);
+                torque += (x - body.pivotX) * fy - (y - body.pivotY) * fx;
+            }
+
+            const effectiveInertia = Math.max(1e-6, massMultiplier * body.momentOfInertia);
+            body.omega += torque / effectiveInertia - damping * body.omega - stiffness * (body.angle - body.restingAngle);
+            const omegaMax = 1 / body.maxRadius;
+            body.omega = Math.max(-omegaMax, Math.min(omegaMax, body.omega));
+            body.angle += body.omega;
+
+            const cosA = Math.cos(body.angle),
+                sinA = Math.sin(body.angle);
+            const newCells = [];
+            const newKeys = new Set();
+            for (const {
+                    dx,
+                    dy
+                } of body.localCells) {
+                const gx = Math.round(body.pivotX + dx * cosA - dy * sinA);
+                const gy = Math.round(body.pivotY + dx * sinA + dy * cosA);
+                if (gx < 0 || gx >= xdim || gy < 0 || gy >= ydim) continue;
+                const key = gx + ',' + gy;
+                if (newKeys.has(key)) continue;
+                newKeys.add(key);
+                newCells.push({
+                    x: gx,
+                    y: gy
+                });
+            }
+
+            // Libera só as células que saíram E ainda pertencem a este corpo (ainda são ROTOR) —
+            // nunca limpar cegamente: corpos podem se sobrepor, ou o usuário pode ter pintado
+            // uma Barreira em cima entre passos.
+            for (const {
+                    x,
+                    y
+                } of body.currentCells) {
+                if (newKeys.has(x + ',' + y)) continue;
+                const i = x + y * xdim;
+                if (this.cellType[i] !== FluidSolver.CELL_TYPE.ROTOR) continue;
+                this.cellType[i] = FluidSolver.CELL_TYPE.NORMAL;
+                this._refillCell(x, y);
+            }
+
+            for (const {
+                    x,
+                    y
+                } of newCells) {
+                this.cellType[x + y * xdim] = FluidSolver.CELL_TYPE.ROTOR;
+            }
+
+            body.currentCells = newCells;
+        }
+        this.rotatingBodies = survivingBodies;
     }
 
     setEquilibrium(x, y, newux, newuy, newrho) {
@@ -170,7 +369,10 @@ export class FluidSolver {
     step({
         u0,
         viscosity,
-        moveTracers
+        moveTracers,
+        rotorMassMultiplier = 1,
+        rotorDamping = 0.05,
+        rotorStiffness = 0
     }) {
         if (this._sinkGeometryDirty) {
             this._recomputeSinkDamping();
@@ -178,6 +380,9 @@ export class FluidSolver {
         }
         this.collide(viscosity);
         this.stream();
+        if (this.rotatingBodies.length > 0) {
+            this._updateRotatingBodies(rotorMassMultiplier, rotorDamping, rotorStiffness);
+        }
         this.setBoundaries(u0);
         this._applySourcesAndSinks();
         if (moveTracers) this.moveTracers();
@@ -482,21 +687,28 @@ export class FluidSolver {
         this.barrierFy = 0.0;
 
         for (let i = 0; i < this.xdim * this.ydim; i++) {
-            if (this.cellType[i] === FluidSolver.CELL_TYPE.BARRIER) {
-                const x = i % this.xdim,
-                    y = Math.floor(i / this.xdim);
-                // Inverte as direções das distribuições que chegaram à barreira
+            const type = this.cellType[i];
+            // ROTOR sofre o mesmo bounce-back que BARRIER (sólido no instante atual), mas não
+            // entra no acúmulo global de força/posição — esse acumulador alimenta a seta
+            // "Força" existente, que representa obstáculos estáticos; o torque de um corpo
+            // giratório é calculado à parte, por corpo, em `_updateRotatingBodies`.
+            if (type === FluidSolver.CELL_TYPE.BARRIER || type === FluidSolver.CELL_TYPE.ROTOR) {
+                // Inverte as direções das distribuições que chegaram ao obstáculo
                 [this.nE[i], this.nW[i]] = [this.nW[i], this.nE[i]];
                 [this.nN[i], this.nS[i]] = [this.nS[i], this.nN[i]];
                 [this.nNE[i], this.nSW[i]] = [this.nSW[i], this.nNE[i]];
                 [this.nNW[i], this.nSE[i]] = [this.nSE[i], this.nNW[i]];
 
-                // Calcula a força total exercida pelo fluido sobre as barreiras
-                this.barrierCount++;
-                this.barrierxSum += x;
-                this.barrierySum += y;
-                this.barrierFx += 2 * (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]);
-                this.barrierFy += 2 * (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]);
+                if (type === FluidSolver.CELL_TYPE.BARRIER) {
+                    const x = i % this.xdim,
+                        y = Math.floor(i / this.xdim);
+                    // Calcula a força total exercida pelo fluido sobre as barreiras estáticas
+                    this.barrierCount++;
+                    this.barrierxSum += x;
+                    this.barrierySum += y;
+                    this.barrierFx += 2 * (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]);
+                    this.barrierFy += 2 * (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]);
+                }
             }
         }
     }
@@ -562,8 +774,8 @@ export class FluidSolver {
             this.tracerY[t] += uy_interp;
             const rx = Math.floor(this.tracerX[t]);
             const ry = Math.floor(this.tracerY[t]);
-            const hitsObstacle = rx >= 0 && rx < this.xdim && ry >= 0 && ry < this.ydim &&
-                (this.cellType[rx + ry * this.xdim] === FluidSolver.CELL_TYPE.BARRIER || this.cellType[rx + ry * this.xdim] === FluidSolver.CELL_TYPE.SINK);
+            const obstacleType = (rx >= 0 && rx < this.xdim && ry >= 0 && ry < this.ydim) ? this.cellType[rx + ry * this.xdim] : -1;
+            const hitsObstacle = obstacleType === FluidSolver.CELL_TYPE.BARRIER || obstacleType === FluidSolver.CELL_TYPE.SINK || obstacleType === FluidSolver.CELL_TYPE.ROTOR;
             if (this.tracerX[t] > this.xdim - 1 || hitsObstacle) {
                 this.tracerX[t] = 0;
                 this.tracerY[t] = Math.random() * this.ydim;
@@ -575,7 +787,8 @@ export class FluidSolver {
         const activeSources = this.dyeSources.filter(source => {
             const ix = Math.floor(source.x),
                 iy = Math.floor(source.y);
-            return ix >= 0 && ix < this.xdim && iy >= 0 && iy < this.ydim && this.cellType[ix + iy * this.xdim] !== FluidSolver.CELL_TYPE.BARRIER;
+            const t = ix >= 0 && ix < this.xdim && iy >= 0 && iy < this.ydim ? this.cellType[ix + iy * this.xdim] : FluidSolver.CELL_TYPE.BARRIER;
+            return t !== FluidSolver.CELL_TYPE.BARRIER && t !== FluidSolver.CELL_TYPE.ROTOR;
         });
         if (activeSources.length === 0) return;
         const activeTracers = this.dyeTracers.filter(t => t.x >= 0).length;
@@ -598,7 +811,8 @@ export class FluidSolver {
         const activeSources = this.dyeSources.filter(source => {
             const ix = Math.floor(source.x),
                 iy = Math.floor(source.y);
-            return ix >= 0 && ix < this.xdim && iy >= 0 && iy < this.ydim && this.cellType[ix + iy * this.xdim] !== FluidSolver.CELL_TYPE.BARRIER;
+            const t = ix >= 0 && ix < this.xdim && iy >= 0 && iy < this.ydim ? this.cellType[ix + iy * this.xdim] : FluidSolver.CELL_TYPE.BARRIER;
+            return t !== FluidSolver.CELL_TYPE.BARRIER && t !== FluidSolver.CELL_TYPE.ROTOR;
         });
         if (activeSources.length > 0) {
             const source = activeSources[Math.floor(Math.random() * activeSources.length)];
@@ -628,7 +842,7 @@ export class FluidSolver {
                 continue;
             }
             const cellType = this.cellType[rx + ry * this.xdim];
-            if (cellType === FluidSolver.CELL_TYPE.BARRIER || cellType === FluidSolver.CELL_TYPE.SINK) {
+            if (cellType === FluidSolver.CELL_TYPE.BARRIER || cellType === FluidSolver.CELL_TYPE.SINK || cellType === FluidSolver.CELL_TYPE.ROTOR) {
                 this._recycleDyeTracer(tracer);
             }
         }

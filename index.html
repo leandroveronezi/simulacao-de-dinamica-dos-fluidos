@@ -75,6 +75,7 @@
                         <button class="paint-type-button active" data-paint-type="barrier">Barreira</button>
                         <button class="paint-type-button" data-paint-type="source">Entrada</button>
                         <button class="paint-type-button" data-paint-type="sink">Saída</button>
+                        <button class="paint-type-button" data-paint-type="rotor">Rotor</button>
                     </div>
                 </article>
 
@@ -130,6 +131,21 @@
                     <label for="stepsSlider">Velocidade da Animação</label>
                     <input id="stepsSlider" type="range" min="1" max="40" step="1" value="20">
                     <small>Passos/segundo: <span id="speedReadout">0</span></small>
+                </article>
+
+                <article>
+                    <h5><i class="fa-solid fa-fan"></i> Objetos Giratórios</h5>
+                    <label for="rotorMassSlider">Massa/Densidade: <span id="rotorMassValue">1.0</span></label>
+                    <input id="rotorMassSlider" type="range" min="0.2" max="5" step="0.1" value="1">
+
+                    <label for="rotorDampingSlider">Amortecimento Angular: <span id="rotorDampingValue">0.050</span></label>
+                    <input id="rotorDampingSlider" type="range" min="0" max="0.2" step="0.005" value="0.05">
+
+                    <label for="rotorStiffnessSlider">Rigidez da Mola: <span id="rotorStiffnessValue">0.000</span>
+                        <i id="rotorStiffnessHelp" class="fas fa-circle-question help-icon" title="Entenda a rigidez"></i>
+                    </label>
+                    <input id="rotorStiffnessSlider" type="range" min="0" max="0.05" step="0.001" value="0">
+                    <small>0 = turbina livre (gira sem parar). Maior que 0 = palheta elástica (balança e volta).</small>
                 </article>
 
                 <article>
