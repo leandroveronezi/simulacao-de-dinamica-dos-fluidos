@@ -366,35 +366,45 @@ export class FluidSolver {
     collide(viscosity) {
         const omega = Math.max(0.01, Math.min(1.99, 1.0 / (3.0 * viscosity + 0.5))); // Parâmetro de relaxação
 
+        // Referências locais aos arrays: evita reler `this.propriedade` a cada célula no loop
+        // quente (uma leitura de propriedade a mais por acesso, 9 arrays, centenas de milhares
+        // de células por passo). Comportamento idêntico, só implementação mais rápida.
+        const n0 = this.n0, nN = this.nN, nS = this.nS, nE = this.nE, nW = this.nW,
+            nNE = this.nNE, nSE = this.nSE, nNW = this.nNW, nSW = this.nSW;
+        const rho = this.rho, ux = this.ux, uy = this.uy;
+        const FOUR_NINTHS = this.FOUR_NINTHS, ONE_NINTH = this.ONE_NINTH, ONE_THIRTY_SIXTH = this.ONE_THIRTY_SIXTH;
+
         for (let i = 0; i < this.xdim * this.ydim; i++) {
             // 1. Calcula densidade e velocidades macroscópicas
-            const thisrho = this.n0[i] + this.nN[i] + this.nS[i] + this.nE[i] + this.nW[i] + this.nNW[i] + this.nNE[i] + this.nSW[i] + this.nSE[i];
+            const thisrho = n0[i] + nN[i] + nS[i] + nE[i] + nW[i] + nNW[i] + nNE[i] + nSW[i] + nSE[i];
 
             if (thisrho <= 0) { // Checagem de estabilidade
-                this.rho[i] = 1;
-                this.ux[i] = 0;
-                this.uy[i] = 0;
+                rho[i] = 1;
+                ux[i] = 0;
+                uy[i] = 0;
                 continue;
             }
-            this.rho[i] = thisrho;
+            rho[i] = thisrho;
 
-            const thisux = (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]) / thisrho;
-            const thisuy = (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]) / thisrho;
-            this.ux[i] = isFinite(thisux) ? thisux : 0;
-            this.uy[i] = isFinite(thisuy) ? thisuy : 0;
+            const thisux = (nE[i] + nNE[i] + nSE[i] - nW[i] - nNW[i] - nSW[i]) / thisrho;
+            const thisuy = (nN[i] + nNE[i] + nNW[i] - nS[i] - nSE[i] - nSW[i]) / thisrho;
+            const cux = isFinite(thisux) ? thisux : 0;
+            const cuy = isFinite(thisuy) ? thisuy : 0;
+            ux[i] = cux;
+            uy[i] = cuy;
 
             // 2. Calcula as distribuições de equilíbrio (f_eq)
-            const one9thrho = this.ONE_NINTH * thisrho;
-            const one36thrho = this.ONE_THIRTY_SIXTH * thisrho;
-            const ux3 = 3 * this.ux[i];
-            const uy3 = 3 * this.uy[i];
-            const ux2 = this.ux[i] * this.ux[i];
-            const uy2 = this.uy[i] * this.uy[i];
-            const uxuy2 = 2 * this.ux[i] * this.uy[i];
+            const one9thrho = ONE_NINTH * thisrho;
+            const one36thrho = ONE_THIRTY_SIXTH * thisrho;
+            const ux3 = 3 * cux;
+            const uy3 = 3 * cuy;
+            const ux2 = cux * cux;
+            const uy2 = cuy * cuy;
+            const uxuy2 = 2 * cux * cuy;
             const u2 = ux2 + uy2;
             const u215 = 1.5 * u2;
 
-            const eq0 = this.FOUR_NINTHS * thisrho * (1 - u215);
+            const eq0 = FOUR_NINTHS * thisrho * (1 - u215);
             const eqE = one9thrho * (1 + ux3 + 4.5 * ux2 - u215);
             const eqW = one9thrho * (1 - ux3 + 4.5 * ux2 - u215);
             const eqN = one9thrho * (1 + uy3 + 4.5 * uy2 - u215);
@@ -405,15 +415,15 @@ export class FluidSolver {
             const eqSW = one36thrho * (1 - ux3 - uy3 + 4.5 * (u2 + uxuy2) - u215);
 
             // 3. Relaxa as distribuições (colisão)
-            this.n0[i] += omega * (eq0 - this.n0[i]);
-            this.nE[i] += omega * (eqE - this.nE[i]);
-            this.nW[i] += omega * (eqW - this.nW[i]);
-            this.nN[i] += omega * (eqN - this.nN[i]);
-            this.nS[i] += omega * (eqS - this.nS[i]);
-            this.nNE[i] += omega * (eqNE - this.nNE[i]);
-            this.nSE[i] += omega * (eqSE - this.nSE[i]);
-            this.nNW[i] += omega * (eqNW - this.nNW[i]);
-            this.nSW[i] += omega * (eqSW - this.nSW[i]);
+            n0[i] += omega * (eq0 - n0[i]);
+            nE[i] += omega * (eqE - nE[i]);
+            nW[i] += omega * (eqW - nW[i]);
+            nN[i] += omega * (eqN - nN[i]);
+            nS[i] += omega * (eqS - nS[i]);
+            nNE[i] += omega * (eqNE - nNE[i]);
+            nSE[i] += omega * (eqSE - nSE[i]);
+            nNW[i] += omega * (eqNW - nNW[i]);
+            nSW[i] += omega * (eqSW - nSW[i]);
         }
     }
 
@@ -423,19 +433,33 @@ export class FluidSolver {
      * A condição de contorno de obstáculo (bounce-back) é aplicada aqui.
      */
     stream() {
-        // Propaga as distribuições para células vizinhas usando arrays temporários
-        for (let y = 0; y < this.ydim; y++) {
-            for (let x = 0; x < this.xdim; x++) {
-                const i = x + y * this.xdim;
-                this.temp_n0[i] = this.n0[i];
-                this.temp_nE[((x + 1) % this.xdim) + y * this.xdim] = this.nE[i];
-                this.temp_nW[((x - 1 + this.xdim) % this.xdim) + y * this.xdim] = this.nW[i];
-                this.temp_nN[x + ((y + 1) % this.ydim) * this.xdim] = this.nN[i];
-                this.temp_nS[x + ((y - 1 + this.ydim) % this.ydim) * this.xdim] = this.nS[i];
-                this.temp_nNE[((x + 1) % this.xdim) + ((y + 1) % this.ydim) * this.xdim] = this.nNE[i];
-                this.temp_nSE[((x + 1) % this.xdim) + ((y - 1 + this.ydim) % this.ydim) * this.xdim] = this.nSE[i];
-                this.temp_nNW[((x - 1 + this.xdim) % this.xdim) + ((y + 1) % this.ydim) * this.xdim] = this.nNW[i];
-                this.temp_nSW[((x - 1 + this.xdim) % this.xdim) + ((y - 1 + this.ydim) % this.ydim) * this.xdim] = this.nSW[i];
+        // Propaga as distribuições para células vizinhas usando arrays temporários. Índices
+        // vizinhos com wraparound (mesmo resultado de `% xdim`/`% ydim`, só que com uma
+        // comparação em vez de uma divisão — bem mais barato, e é chamado por célula, 8 vezes,
+        // a cada passo). setBoundaries() sobrescreve as bordas logo em seguida de qualquer forma.
+        const xdim = this.xdim, ydim = this.ydim;
+        const n0 = this.n0, nN = this.nN, nS = this.nS, nE = this.nE, nW = this.nW,
+            nNE = this.nNE, nSE = this.nSE, nNW = this.nNW, nSW = this.nSW;
+        const t0 = this.temp_n0, tN = this.temp_nN, tS = this.temp_nS, tE = this.temp_nE, tW = this.temp_nW,
+            tNE = this.temp_nNE, tSE = this.temp_nSE, tNW = this.temp_nNW, tSW = this.temp_nSW;
+
+        for (let y = 0; y < ydim; y++) {
+            const yUp = (y + 1 < ydim) ? y + 1 : 0;
+            const yDn = (y > 0) ? y - 1 : ydim - 1;
+            const rowBase = y * xdim, rowUpBase = yUp * xdim, rowDnBase = yDn * xdim;
+            for (let x = 0; x < xdim; x++) {
+                const i = rowBase + x;
+                const xR = (x + 1 < xdim) ? x + 1 : 0;
+                const xL = (x > 0) ? x - 1 : xdim - 1;
+                t0[i] = n0[i];
+                tE[rowBase + xR] = nE[i];
+                tW[rowBase + xL] = nW[i];
+                tN[rowUpBase + x] = nN[i];
+                tS[rowDnBase + x] = nS[i];
+                tNE[rowUpBase + xR] = nNE[i];
+                tSE[rowDnBase + xR] = nSE[i];
+                tNW[rowUpBase + xL] = nNW[i];
+                tSW[rowDnBase + xL] = nSW[i];
             }
         }
 
