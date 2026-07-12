@@ -283,17 +283,21 @@ export class FluidSolver {
             this.nSW[i] = this.nSW[i_prev] || 0;
         }
 
-        // Bordas superior e inferior (paredes com deslizamento)
+        // Bordas superior e inferior (paredes com deslizamento livre): reflete apenas a
+        // componente normal (y), preservando a direção tangencial (x) — uma reflexão espelhada,
+        // não uma rotação de 180°. Trocar nNE<->nNW aqui reintroduz o bug antigo: rouba
+        // quantidade de movimento em x bem na parede sempre que há fluxo net, gerando uma
+        // perturbação espúria que nasce no canto onde a entrada encontra a parede.
         for (let x = 0; x < this.xdim; x++) {
             const i_top = x + (this.ydim - 1) * this.xdim;
             const i_bot = x;
             this.nS[i_top] = this.nN[i_top] || 0;
-            this.nSE[i_top] = this.nNW[i_top] || 0;
-            this.nSW[i_top] = this.nNE[i_top] || 0;
+            this.nSE[i_top] = this.nNE[i_top] || 0;
+            this.nSW[i_top] = this.nNW[i_top] || 0;
 
             this.nN[i_bot] = this.nS[i_bot] || 0;
-            this.nNE[i_bot] = this.nSW[i_bot] || 0;
-            this.nNW[i_bot] = this.nSE[i_bot] || 0;
+            this.nNE[i_bot] = this.nSE[i_bot] || 0;
+            this.nNW[i_bot] = this.nSW[i_bot] || 0;
         }
     }
 
