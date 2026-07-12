@@ -339,14 +339,20 @@ export class FluidSimulationApp {
 
     /**
      * @private
-     * @description Reseta toda a simulação para um estado inicial.
+     * @description Reseta toda a simulação para um estado inicial. Sem argumentos, a grade é
+     * dimensionada para preencher a janela atual (novo cenário em branco). Passando xdim/ydim
+     * (vindo de uma configuração importada), a grade usa exatamente essas dimensões — a grade
+     * de uma cena salva é uma propriedade dela mesma, não deve depender do tamanho da janela de
+     * quem está importando; zoom/pan cuidam de exibir uma grade maior ou menor que a viewport.
      */
-    _resetSimulation() {
+    _resetSimulation(xdim, ydim) {
         this.pxPerSquare = FluidSimulationApp.PX_PER_SQUARE;
-        const xdim = Math.floor((this.canvasContainer.clientWidth - Renderer.RULER_SIZE) / this.pxPerSquare);
-        const ydim = Math.floor((this.canvasContainer.clientHeight - Renderer.RULER_SIZE) / this.pxPerSquare);
         this.canvas.width = this.canvasContainer.clientWidth;
         this.canvas.height = this.canvasContainer.clientHeight;
+        if (xdim === undefined || ydim === undefined) {
+            xdim = Math.floor((this.canvasContainer.clientWidth - Renderer.RULER_SIZE) / this.pxPerSquare);
+            ydim = Math.floor((this.canvasContainer.clientHeight - Renderer.RULER_SIZE) / this.pxPerSquare);
+        }
 
         this.solver = new FluidSolver(xdim, ydim);
         this.solver.boundaryMode = this.boundaryModeSelect.value;
@@ -362,6 +368,7 @@ export class FluidSimulationApp {
         this._setActiveTool('brush'); // Garante estado de UI consistente
         this._setActivePaintType('barrier');
         this._updateUndoRedoButtons();
+        this._resetView();
 
         this._requestPaint();
     }
@@ -1196,7 +1203,9 @@ export class FluidSimulationApp {
 
     _exportConfiguration() {
         const config = {
-            version: 13,
+            version: 14,
+            xdim: this.solver.xdim,
+            ydim: this.solver.ydim,
             boundaryMode: this.solver.boundaryMode,
             cellTypes: Array.from(this.solver.cellType),
             sourceVx: Array.from(this.solver.sourceVx),
@@ -1231,7 +1240,7 @@ export class FluidSimulationApp {
             reader.onload = event => {
                 try {
                     const config = JSON.parse(event.target.result);
-                    if (config.version < 12) throw new Error('Formato de arquivo antigo ou incompatível.');
+                    if (config.version < 14) throw new Error('Formato de arquivo antigo ou incompatível (não guarda o tamanho da grade). Exporte novamente.');
                     this._applyConfiguration(config);
                 } catch (err) {
                     Swal.fire('Erro', `Não foi possível importar a configuração: ${err.message}`, 'error');
@@ -1253,7 +1262,7 @@ export class FluidSimulationApp {
         this.forceCheck.checked = config.showForce;
         this.sensorCheck.checked = config.showSensor;
         this.boundaryModeSelect.value = config.boundaryMode || 'channel';
-        this._resetSimulation();
+        this._resetSimulation(config.xdim, config.ydim);
         this.solver.cellType = Uint8Array.from(config.cellTypes);
         if (config.sourceVx) this.solver.sourceVx = Float32Array.from(config.sourceVx);
         if (config.sourceVy) this.solver.sourceVy = Float32Array.from(config.sourceVy);
