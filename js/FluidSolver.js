@@ -764,22 +764,33 @@ export class FluidSolver {
         return v00 * (1 - wx) * (1 - wy) + v10 * wx * (1 - wy) + v01 * (1 - wx) * wy + v11 * wx * wy;
     }
 
+    /**
+     * @description Move os traçadores de fluxo pelo campo de velocidade interpolado. Só a
+     * Saída "absorve" de verdade (recicla o traçador de volta pra entrada) — é um dreno, faz
+     * sentido sumir ali. Barreira e Rotor são sólidos: o traçador simplesmente não entra na
+     * célula (fica onde estava naquele passo), deixando o próprio campo de velocidade — que já
+     * desvia ao redor do obstáculo — levá-lo pro lado nos passos seguintes, em vez de reciclar.
+     */
     moveTracers() {
         if (!this.tracerX) return;
         for (let t = 0; t < FluidSolver.N_TRACERS; t++) {
             const ux_interp = this._bilinearInterpolate(this.tracerX[t], this.tracerY[t], this.ux);
             const uy_interp = this._bilinearInterpolate(this.tracerX[t], this.tracerY[t], this.uy);
             if (!isFinite(ux_interp) || !isFinite(uy_interp)) continue;
-            this.tracerX[t] += ux_interp;
-            this.tracerY[t] += uy_interp;
-            const rx = Math.floor(this.tracerX[t]);
-            const ry = Math.floor(this.tracerY[t]);
-            const obstacleType = (rx >= 0 && rx < this.xdim && ry >= 0 && ry < this.ydim) ? this.cellType[rx + ry * this.xdim] : -1;
-            const hitsObstacle = obstacleType === FluidSolver.CELL_TYPE.BARRIER || obstacleType === FluidSolver.CELL_TYPE.SINK || obstacleType === FluidSolver.CELL_TYPE.ROTOR;
-            if (this.tracerX[t] > this.xdim - 1 || hitsObstacle) {
+            const newX = this.tracerX[t] + ux_interp;
+            const newY = this.tracerY[t] + uy_interp;
+            const rx = Math.floor(newX);
+            const ry = Math.floor(newY);
+            const cellAtNew = (rx >= 0 && rx < this.xdim && ry >= 0 && ry < this.ydim) ? this.cellType[rx + ry * this.xdim] : -1;
+
+            if (newX > this.xdim - 1 || cellAtNew === FluidSolver.CELL_TYPE.SINK) {
                 this.tracerX[t] = 0;
                 this.tracerY[t] = Math.random() * this.ydim;
+                continue;
             }
+            if (cellAtNew === FluidSolver.CELL_TYPE.BARRIER || cellAtNew === FluidSolver.CELL_TYPE.ROTOR) continue;
+            this.tracerX[t] = newX;
+            this.tracerY[t] = newY;
         }
     }
 
@@ -824,6 +835,12 @@ export class FluidSolver {
         }
     }
 
+    /**
+     * @description Move os traçadores de fumaça pelo campo de velocidade interpolado. Mesma
+     * regra de `moveTracers()`: só a Saída recicla de verdade (dreno); Barreira e Rotor apenas
+     * impedem a partícula de entrar na célula sólida, sem apagá-la — o desvio ao redor do
+     * obstáculo é responsabilidade do próprio campo de velocidade, não deste método.
+     */
     moveDyeTracers() {
         for (const tracer of this.dyeTracers) {
             if (tracer.x < 0) continue;
@@ -833,18 +850,22 @@ export class FluidSolver {
                 this._recycleDyeTracer(tracer);
                 continue;
             }
-            tracer.x += ux_interp;
-            tracer.y += uy_interp;
-            const rx = Math.floor(tracer.x);
-            const ry = Math.floor(tracer.y);
+            const newX = tracer.x + ux_interp;
+            const newY = tracer.y + uy_interp;
+            const rx = Math.floor(newX);
+            const ry = Math.floor(newY);
             if (rx < 0 || rx >= this.xdim || ry < 0 || ry >= this.ydim) {
                 this._recycleDyeTracer(tracer);
                 continue;
             }
             const cellType = this.cellType[rx + ry * this.xdim];
-            if (cellType === FluidSolver.CELL_TYPE.BARRIER || cellType === FluidSolver.CELL_TYPE.SINK || cellType === FluidSolver.CELL_TYPE.ROTOR) {
+            if (cellType === FluidSolver.CELL_TYPE.SINK) {
                 this._recycleDyeTracer(tracer);
+                continue;
             }
+            if (cellType === FluidSolver.CELL_TYPE.BARRIER || cellType === FluidSolver.CELL_TYPE.ROTOR) continue;
+            tracer.x = newX;
+            tracer.y = newY;
         }
     }
 }
