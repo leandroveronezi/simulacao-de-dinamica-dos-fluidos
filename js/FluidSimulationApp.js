@@ -1002,6 +1002,7 @@ export class FluidSimulationApp {
     }
     initFluid() {
         this.solver.initFluid(this.solver.boundaryMode === 'open' ? 0 : Number(this.speedSlider.value));
+        this.solver.initDyeTracers();
         this._requestPaint();
     }
     resetTimer() {
