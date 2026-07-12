@@ -8,7 +8,8 @@ import { Renderer } from './Renderer.js';
  */
 export class FluidSimulationApp {
     static PX_PER_SQUARE = 5;
-    static MIN_ZOOM = 1;
+    static GRID_SIZE_MULTIPLIER = 1;
+    static MIN_ZOOM = 1 / FluidSimulationApp.GRID_SIZE_MULTIPLIER;
     static MAX_ZOOM = 8;
     static ZOOM_STEP = 1.15;
     static MAX_SOURCE_SPEED = 0.15;
@@ -241,10 +242,20 @@ export class FluidSimulationApp {
         this._requestPaint();
     }
 
+    /**
+     * @private
+     * @description Restaura zoom=1 e centraliza a grade na viewport. Com a grade maior que a
+     * janela (padrão desde o multiplicador de tamanho), ancorar em panX=panY=0 mostrava só o
+     * canto superior esquerdo — centralizar dá uma visão inicial mais útil.
+     */
     _resetView() {
         this.zoom = 1;
-        this.panX = 0;
-        this.panY = 0;
+        const viewportWidth = this.canvas.width - Renderer.RULER_SIZE;
+        const viewportHeight = this.canvas.height - Renderer.RULER_SIZE;
+        const gridContentWidth = this.solver.xdim * this.pxPerSquare;
+        const gridContentHeight = this.solver.ydim * this.pxPerSquare;
+        this.panX = (viewportWidth - gridContentWidth * this.zoom) / 2;
+        this.panY = (viewportHeight - gridContentHeight * this.zoom) / 2;
         this._requestPaint();
     }
 
@@ -350,8 +361,10 @@ export class FluidSimulationApp {
         this.canvas.width = this.canvasContainer.clientWidth;
         this.canvas.height = this.canvasContainer.clientHeight;
         if (xdim === undefined || ydim === undefined) {
-            xdim = Math.floor((this.canvasContainer.clientWidth - Renderer.RULER_SIZE) / this.pxPerSquare);
-            ydim = Math.floor((this.canvasContainer.clientHeight - Renderer.RULER_SIZE) / this.pxPerSquare);
+            const viewportXdim = Math.floor((this.canvasContainer.clientWidth - Renderer.RULER_SIZE) / this.pxPerSquare);
+            const viewportYdim = Math.floor((this.canvasContainer.clientHeight - Renderer.RULER_SIZE) / this.pxPerSquare);
+            xdim = viewportXdim * FluidSimulationApp.GRID_SIZE_MULTIPLIER;
+            ydim = viewportYdim * FluidSimulationApp.GRID_SIZE_MULTIPLIER;
         }
 
         this.solver = new FluidSolver(xdim, ydim);
