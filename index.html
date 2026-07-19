@@ -11,6 +11,8 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
     <!-- SweetAlert2 -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <!-- Clipper.js (geometria booleana de polígono — corte/união de formas, ver bugs.md #45) -->
+    <script src="https://cdn.jsdelivr.net/npm/clipper-lib@6.4.2/clipper.js"></script>
     <!-- JetBrains Mono -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,73 +24,143 @@
     <div class="app-container">
         <header>
             <h4><i class="fa-solid fa-wind"></i> Dinâmica dos Fluidos</h4>
-            <div class="toolbar">
-                <div class="button-group">
-                    <button id="startButton"><i class="fa-solid fa-play"></i> Iniciar</button>
-                    <button id="resetFluidButton" class="secondary"><i class="fa-solid fa-arrow-rotate-left"></i> Fluido</button>
-                    <button id="stepButton" class="secondary"><i class="fa-solid fa-forward-step"></i> Passo</button>
-                    <button id="clearButton" class="contrast"><i class="fa-solid fa-trash-can"></i> Limpar</button>
-                    <div class="separator"></div>
-                    <button id="undoButton" class="icon-button" title="Desfazer (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
-                    <button id="redoButton" class="icon-button" title="Refazer (Ctrl+Y)"><i class="fa-solid fa-rotate-right"></i></button>
-                    <div class="separator"></div>
-                    <button id="importButton" class="icon-button" title="Importar Configuração"><i class="fa-solid fa-upload"></i></button>
-                    <button id="exportButton" class="icon-button" title="Exportar Configuração"><i class="fa-solid fa-download"></i></button>
-                    <button id="screenshotButton" class="icon-button" title="Capturar Tela"><i class="fa-solid fa-camera"></i></button>
-                    <div class="separator"></div>
-                    <button id="zoomOutButton" class="icon-button" title="Diminuir Zoom"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
-                    <button id="zoomInButton" class="icon-button" title="Aumentar Zoom"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
-                    <button id="resetZoomButton" class="icon-button" title="Redefinir Zoom"><i class="fa-solid fa-compress"></i></button>
+
+            <nav class="menu-bar">
+                <div class="menu-item">
+                    <button class="menu-trigger">Arquivo</button>
+                    <div class="menu-dropdown">
+                        <button id="newProjectButton" class="menu-dropdown-item"><i class="fa-regular fa-file"></i> Novo</button>
+                        <button id="saveProjectButton" class="menu-dropdown-item"><i class="fa-regular fa-floppy-disk"></i> Salvar</button>
+                        <button id="saveAsProjectButton" class="menu-dropdown-item"><i class="fa-regular fa-floppy-disk"></i> Salvar Como...</button>
+                        <button id="openProjectButton" class="menu-dropdown-item"><i class="fa-regular fa-folder-open"></i> Abrir Projeto...</button>
+                        <div class="menu-divider"></div>
+                        <button id="importButton" class="menu-dropdown-item"><i class="fa-solid fa-upload"></i> Importar Arquivo...</button>
+                        <button id="exportButton" class="menu-dropdown-item"><i class="fa-solid fa-download"></i> Exportar Arquivo</button>
+                        <div class="menu-divider"></div>
+                        <button id="screenshotButton" class="menu-dropdown-item"><i class="fa-solid fa-camera"></i> Capturar Tela</button>
+                    </div>
                 </div>
-            </div>
+            </nav>
+
+            <span id="projectIndicator" class="project-indicator" title="Projeto atual"></span>
         </header>
 
-        <main id="simulation-container">
-            <aside id="left-sidebar" class="sidebar">
-                <div class="tool-palette">
-                    <button class="tool-button active" data-tool="brush" title="Pincel"><i class="fa-solid fa-pencil"></i></button>
-                    <button class="tool-button" data-tool="line" title="Linha"><i class="fa-solid fa-minus"></i></button>
-                    <button class="tool-button" data-tool="rectangle_filled" title="Retângulo (Preenchido)"><i class="fa-solid fa-square"></i></button>
-                    <button class="tool-button" data-tool="ellipse_filled" title="Elipse (Preenchida)"><i class="fa-solid fa-circle"></i></button>
-                    <button class="tool-button" data-tool="rectangle_outline" title="Retângulo (Contorno)"><i class="fa-regular fa-square"></i></button>
-                    <button class="tool-button" data-tool="ellipse_outline" title="Elipse (Contorno)"><i class="fa-regular fa-circle"></i></button>
-                    <button class="tool-button" data-tool="rounded_rectangle" title="Retângulo Arredondado"><i class="fa-solid fa-draw-polygon"></i></button>
-                    <button class="tool-button" data-tool="fill" title="Preenchimento"><i class="fa-solid fa-fill-drip"></i></button>
-                    <button class="tool-button" data-tool="spray" title="Spray"><i class="fa-solid fa-spray-can"></i></button>
-                    <button class="tool-button" data-tool="eraser" title="Borracha Retangular"><i class="fa-solid fa-eraser"></i></button>
-                    <hr>
-                    <button class="tool-button" data-tool="smoke" title="Fumaça / Corante"><i class="fa-solid fa-smog"></i></button>
-                    <button class="tool-button" data-tool="select" title="Seleção"><i class="fa-solid fa-vector-square"></i></button>
-                    <hr>
-                    <button class="tool-button" data-tool="pan" title="Mover (pan)"><i class="fa-solid fa-hand"></i></button>
-                </div>
-            </aside>
+        <div class="ribbon">
+            <div class="ribbon-group">
+                <button class="tool-button active" data-tool="brush" title="Pincel"><i class="fa-solid fa-pencil"></i><span class="label">Pincel</span></button>
+                <button class="tool-button" data-tool="line" title="Linha"><i class="fa-solid fa-minus"></i><span class="label">Linha</span></button>
+                <button class="tool-button" data-tool="rectangle_filled" title="Retângulo (Preenchido)"><i class="fa-solid fa-square"></i><span class="label">Retângulo</span></button>
+                <button class="tool-button" data-tool="ellipse_filled" title="Elipse (Preenchida)"><i class="fa-solid fa-circle"></i><span class="label">Elipse</span></button>
+                <button class="tool-button" data-tool="rectangle_outline" title="Retângulo (Contorno)"><i class="fa-regular fa-square"></i><span class="label">Ret. Vazio</span></button>
+                <button class="tool-button" data-tool="ellipse_outline" title="Elipse (Contorno)"><i class="fa-regular fa-circle"></i><span class="label">Elipse Vazia</span></button>
+                <button class="tool-button" data-tool="rounded_rectangle" title="Retângulo Arredondado"><i class="fa-solid fa-draw-polygon"></i><span class="label">Arredond.</span></button>
+                <button class="tool-button" data-tool="fill" title="Preenchimento"><i class="fa-solid fa-fill-drip"></i><span class="label">Preencher</span></button>
+                <button class="tool-button" data-tool="eraser" title="Borracha Retangular — arraste para definir a área a apagar"><i class="fa-solid fa-eraser"></i><span class="label">Borracha</span></button>
+                <button class="tool-button" data-tool="eraser_line" title="Borracha Linha — apaga em traço livre, funciona na diagonal"><i class="fa-solid fa-pen-nib"></i><span class="label">Borracha Linha</span></button>
+            </div>
+            <div class="ribbon-group">
+                <button class="tool-button" data-tool="smoke" title="Fumaça / Corante"><i class="fa-solid fa-smog"></i><span class="label">Fumaça</span></button>
+                <button class="tool-button" data-tool="select" title="Seleção"><i class="fa-solid fa-vector-square"></i><span class="label">Seleção</span></button>
+            </div>
+        </div>
 
+        <main id="simulation-container">
             <div id="canvas-container">
                 <canvas id="theCanvas">Seu navegador não suporta a tag canvas do HTML5.</canvas>
+                <div id="simulationControlsWidget" class="viewport-simulation-controls">
+                    <button id="startButton" class="icon-button" title="Iniciar"><i class="fa-solid fa-play"></i></button>
+                    <button id="stepButton" class="icon-button" title="Passo único"><i class="fa-solid fa-forward-step"></i></button>
+                    <button id="resetFluidButton" class="icon-button" title="Reiniciar Fluido"><i class="fa-solid fa-arrow-rotate-left"></i></button>
+                    <div class="viewport-zoom-controls-divider"></div>
+                    <button id="clearButton" class="icon-button danger" title="Limpar tudo"><i class="fa-solid fa-trash-can"></i></button>
+                </div>
+                <div class="viewport-zoom-controls">
+                    <button id="zoomUndoButton" class="icon-button" title="Desfazer (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
+                    <button id="zoomRedoButton" class="icon-button" title="Refazer (Ctrl+Y)"><i class="fa-solid fa-rotate-right"></i></button>
+                    <div class="viewport-zoom-controls-divider"></div>
+                    <button class="tool-button" data-tool="pointer" title="Selecionar / Editar forma"><i class="fa-solid fa-arrow-pointer"></i></button>
+                    <button class="tool-button" data-tool="pan" title="Mover (pan)"><i class="fa-solid fa-hand"></i></button>
+                    <div class="viewport-zoom-controls-divider"></div>
+                    <button id="zoomOutButton" class="icon-button" title="Diminuir Zoom"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+                    <button id="resetZoomButton" class="icon-button" title="Redefinir Zoom"><i class="fa-solid fa-compress"></i></button>
+                    <button id="zoomInButton" class="icon-button" title="Aumentar Zoom"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+                </div>
+
+                <div id="valveControlsWidget" class="viewport-valve-controls" hidden></div>
+
+                <div id="floatingPropertyPanel" class="floating-panel" hidden>
+                    <div class="floating-panel-header">
+                        <span id="floatingPanelTitle">Propriedades</span>
+                        <button id="floatingPanelCloseButton" class="icon-button" type="button" title="Fechar"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="floating-panel-body">
+                        <div id="floatingPanelPositionEdit" class="floating-panel-geometry-edit" hidden>
+                            <label>X
+                                <input id="floatingPanelXInput" type="number" step="1">
+                            </label>
+                            <label>Y
+                                <input id="floatingPanelYInput" type="number" step="1">
+                            </label>
+                        </div>
+                        <div id="floatingPanelGeometryLine" class="floating-panel-geometry-edit" hidden>
+                            <label>Comprimento
+                                <input id="floatingPanelLengthInput" type="number" min="0" step="1">
+                            </label>
+                            <label>Ângulo (°)
+                                <input id="floatingPanelAngleInput" type="number" step="1">
+                            </label>
+                            <label>Espessura
+                                <input id="floatingPanelLineWidthInput" type="number" min="1" max="4" step="0.1">
+                            </label>
+                        </div>
+                        <div id="floatingPanelGeometryRect" class="floating-panel-geometry-edit" hidden>
+                            <label>Largura
+                                <input id="floatingPanelWidthInput" type="number" min="1" step="1">
+                            </label>
+                            <label>Altura
+                                <input id="floatingPanelHeightInput" type="number" min="1" step="1">
+                            </label>
+                        </div>
+                        <div id="floatingPanelSourceControls" class="floating-panel-geometry-edit" hidden>
+                            <label>Velocidade
+                                <input id="floatingPanelSpeedInput" type="number" min="0" step="0.01">
+                            </label>
+                            <label>Ângulo do fluxo (°)
+                                <input id="floatingPanelFlowAngleInput" type="number" step="1">
+                            </label>
+                        </div>
+                        <div id="floatingPanelRotorControls" hidden>
+                            <label for="rotorMassSlider">Massa/Densidade: <span id="rotorMassValue">1.0</span></label>
+                            <input id="rotorMassSlider" type="range" min="0.2" max="5" step="0.1" value="1">
+
+                            <label for="rotorDampingSlider">Amortecimento Angular: <span id="rotorDampingValue">0.050</span></label>
+                            <input id="rotorDampingSlider" type="range" min="0" max="0.2" step="0.005" value="0.05">
+
+                            <label for="rotorStiffnessSlider">Rigidez da Mola: <span id="rotorStiffnessValue">0.000</span>
+                                <i id="rotorStiffnessHelp" class="fas fa-circle-question help-icon" title="Entenda a rigidez"></i>
+                            </label>
+                            <input id="rotorStiffnessSlider" type="range" min="0" max="0.05" step="0.001" value="0">
+                            <small>0 = turbina livre. Maior que 0 = palheta elástica.</small>
+                        </div>
+                        <button id="deleteShapeButton" class="contrast" type="button" hidden><i class="fa-solid fa-trash-can"></i> Apagar forma</button>
+                    </div>
+                </div>
             </div>
 
             <aside id="right-sidebar" class="sidebar">
-                <article id="paint-type-panel">
-                    <h5><i class="fa-solid fa-layer-group"></i> Tipo de Desenho</h5>
+                <details id="paint-type-panel" open>
+                    <summary><i class="fa-solid fa-layer-group"></i> Tipo de Desenho</summary>
                     <div class="button-grid">
-                        <button class="paint-type-button active" data-paint-type="barrier">Barreira</button>
-                        <button class="paint-type-button" data-paint-type="source">Entrada</button>
-                        <button class="paint-type-button" data-paint-type="sink">Saída</button>
-                        <button class="paint-type-button" data-paint-type="rotor">Rotor</button>
+                        <button class="paint-type-button active" data-paint-type="barrier"><i class="fa-solid fa-grip-lines-vertical"></i> Barreira</button>
+                        <button class="paint-type-button" data-paint-type="source"><i class="fa-solid fa-arrow-right-to-bracket"></i> Entrada</button>
+                        <button class="paint-type-button" data-paint-type="sink"><i class="fa-solid fa-arrow-right-from-bracket"></i> Saída</button>
+                        <button class="paint-type-button" data-paint-type="rotor"><i class="fa-solid fa-fan"></i> Rotor</button>
+                        <button class="paint-type-button" data-paint-type="valve"><i class="fa-solid fa-door-closed"></i> Válvula</button>
                     </div>
-                </article>
+                </details>
 
-                <article id="tool-options-panel" hidden>
-                    <h5><i class="fa-solid fa-toolbox"></i> Opções da Ferramenta</h5>
-                    <div id="spray-options" hidden>
-                        <label for="spraySizeSlider">Tamanho do Spray: <span id="spraySizeValue">10</span></label>
-                        <input id="spraySizeSlider" type="range" min="2" max="50" step="1" value="10">
-                    </div>
-                </article>
-
-                <article id="selection-options-panel" hidden>
-                    <h5><i class="fa-solid fa-object-group"></i> Opções da Seleção</h5>
+                <details id="selection-options-panel" open hidden>
+                    <summary><i class="fa-solid fa-object-group"></i> Opções da Seleção</summary>
                     <div class="button-grid">
                         <button id="copySelectionButton" title="Copiar"><i class="fa-solid fa-copy"></i></button>
                         <button id="cutSelectionButton" title="Recortar"><i class="fa-solid fa-scissors"></i></button>
@@ -100,10 +172,10 @@
                     </div>
                     <button id="deleteSelectionButton" class="contrast"><i class="fa-solid fa-trash-can"></i> Apagar Seleção</button>
                     <button id="clearSelectionButton" class="secondary"><i class="fa-solid fa-xmark"></i> Limpar Seleção</button>
-                </article>
+                </details>
 
-                <article>
-                    <h5><i class="fa-solid fa-sliders"></i> Simulação</h5>
+                <details open>
+                    <summary><i class="fa-solid fa-sliders"></i> Simulação</summary>
                     <label for="boundaryModeSelect">Modo de Simulação</label>
                     <select id="boundaryModeSelect">
                         <option value="channel" selected>Canal</option>
@@ -131,25 +203,10 @@
                     <label for="stepsSlider">Velocidade da Animação</label>
                     <input id="stepsSlider" type="range" min="1" max="40" step="1" value="20">
                     <small>Passos/segundo: <span id="speedReadout">0</span></small>
-                </article>
+                </details>
 
-                <article>
-                    <h5><i class="fa-solid fa-fan"></i> Objetos Giratórios</h5>
-                    <label for="rotorMassSlider">Massa/Densidade: <span id="rotorMassValue">1.0</span></label>
-                    <input id="rotorMassSlider" type="range" min="0.2" max="5" step="0.1" value="1">
-
-                    <label for="rotorDampingSlider">Amortecimento Angular: <span id="rotorDampingValue">0.050</span></label>
-                    <input id="rotorDampingSlider" type="range" min="0" max="0.2" step="0.005" value="0.05">
-
-                    <label for="rotorStiffnessSlider">Rigidez da Mola: <span id="rotorStiffnessValue">0.000</span>
-                        <i id="rotorStiffnessHelp" class="fas fa-circle-question help-icon" title="Entenda a rigidez"></i>
-                    </label>
-                    <input id="rotorStiffnessSlider" type="range" min="0" max="0.05" step="0.001" value="0">
-                    <small>0 = turbina livre (gira sem parar). Maior que 0 = palheta elástica (balança e volta).</small>
-                </article>
-
-                <article>
-                    <h5><i class="fa-solid fa-eye"></i> Visualização</h5>
+                <details open>
+                    <summary><i class="fa-solid fa-eye"></i> Visualização</summary>
                     <label for="plotSelect">Exibir
                         <i id="visualizationHelp" class="fas fa-circle-question help-icon" title="Entenda as visualizações"></i>
                     </label>
@@ -167,14 +224,17 @@
                     <fieldset>
                         <label for="tracerCheck"><input type="checkbox" id="tracerCheck" role="switch">Traçadores</label>
                         <label for="forceCheck"><input type="checkbox" id="forceCheck" role="switch">Força</label>
+                        <label for="arrowsCheck"><input type="checkbox" id="arrowsCheck" role="switch">Setas</label>
                         <label for="sensorCheck"><input type="checkbox" id="sensorCheck" role="switch">Sensor</label>
                     </fieldset>
-                </article>
+                </details>
             </aside>
         </main>
     </div>
 
-    <script type="module" src="main.js"></script>
+
+    <div id="app-tooltip"></div>
+    <script type="module" src="main.js?v=20260713p"></script>
 </body>
 
 </html>

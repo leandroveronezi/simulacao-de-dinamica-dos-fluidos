@@ -1,5 +1,5 @@
-import { FluidSimulationApp } from './js/FluidSimulationApp.js';
+import { FluidSimulationApp } from './js/FluidSimulationApp.js?v=20260713p';
 
 document.addEventListener('DOMContentLoaded', () => {
-    new FluidSimulationApp('main');
+    window.__app = new FluidSimulationApp('main');
 });

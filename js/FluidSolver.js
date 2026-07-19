@@ -9,7 +9,11 @@ export class FluidSolver {
         BARRIER: 1,
         SOURCE: 2,
         SINK: 3,
-        ROTOR: 4
+        ROTOR: 4,
+        // VALVE nunca aparece de fato em solver.cellType — é resolvida pra NORMAL (aberta) ou
+        // BARRIER (fechada) antes de tocar o solver, ver FluidSimulationApp._rasterizeShapes.
+        // Existe só como identidade de shapes[]/UI (bugs.md #40).
+        VALVE: 5
     });
 
     static N_TRACERS = 144;
@@ -17,8 +21,18 @@ export class FluidSolver {
     static PARTICLES_PER_FRAME_EMISSION = 10;
     static SINK_RAMP_CELLS = 8;
     static SINK_MAX_DAMPING = 0.9;
-    static SINK_TARGET_RHO = 0.97;
-    static ROTOR_MAX_TIP_SPEED = 0.15;
+    static SINK_TARGET_RHO = 0.97; // Absorção local moderada — transparente ao fluxo, remove massa
+
+    // Igual ao máximo de "Velocidade do Fluxo" (u0) permitido pelo slider — mantém a
+    // velocidade de ponta do Rotor na mesma faixa que o resto do solver já é ajustado/validado
+    // para suportar. 0.15 (usado antes) parecia estável em testes curtos, mas rodando por mais
+    // tempo (~1000+ passos) desestabilizava eventualmente, mesmo com um único Rotor — a fronteira
+    // de estabilidade aqui não é monotônica com esse valor (testei 0.10/0.12/0.13/0.14/0.15: só
+    // 0.13 falhou cedo, os outros ficaram estáveis por 3000-6000 passos, incluindo dois Rotores
+    // simultâneos) — não dá para escolher com confiança um valor "só um pouco mais alto" sem
+    // rodar de novo por milhares de passos; ficar dentro da faixa já validada pro resto do
+    // solver é a escolha mais segura.
+    static ROTOR_MAX_TIP_SPEED = 0.10;
 
     constructor(xdim, ydim) {
         // Pesos do modelo LBM D2Q9
@@ -69,6 +83,7 @@ export class FluidSolver {
         this.cellType = new Uint8Array(size);
         this.sourceVx = new Float32Array(size);
         this.sourceVy = new Float32Array(size);
+        this.sourceGroups = [];
         this.sinkDamping = new Float32Array(size);
         this._sinkGeometryDirty = true;
         this.dyeSources = [];
@@ -110,6 +125,80 @@ export class FluidSolver {
     }
 
     /**
+     * @description Registra um novo grupo de Entrada a partir das células já pintadas como
+     * SOURCE — agrupa as células desenhadas juntas sob um vetor de velocidade compartilhado,
+     * pra poder selecionar e reajustar a direção/velocidade depois (igual ao pivô do Rotor),
+     * em vez de precisar apagar e redesenhar. `sourceVx/sourceVy` (arrays por célula, usados
+     * pela física em `_applySourcesAndSinks`) continuam sendo a fonte de verdade pro solver —
+     * este grupo é só a camada de identidade/seleção por cima deles.
+     */
+    addSourceGroup(cells, vx, vy) {
+        if (!cells || cells.length === 0) return;
+        let sumX = 0,
+            sumY = 0;
+        for (const {
+            x,
+            y
+        } of cells) {
+            sumX += x;
+            sumY += y;
+        }
+        const originX = sumX / cells.length;
+        const originY = sumY / cells.length;
+        this.sourceGroups.push({
+            cells: cells.map(c => ({
+                x: c.x,
+                y: c.y
+            })),
+            originX,
+            originY,
+            vx,
+            vy
+        });
+        for (const {
+            x,
+            y
+        } of cells) {
+            const i = x + y * this.xdim;
+            this.sourceVx[i] = vx;
+            this.sourceVy[i] = vy;
+        }
+    }
+
+    /**
+     * @description Reajusta a velocidade de um grupo de Entrada já existente (selecionado pelo
+     * usuário), reescrevendo tanto o grupo quanto as células planas que a física lê.
+     */
+    updateSourceGroupVelocity(index, vx, vy) {
+        const group = this.sourceGroups[index];
+        if (!group) return;
+        group.vx = vx;
+        group.vy = vy;
+        for (const {
+            x,
+            y
+        } of group.cells) {
+            const i = x + y * this.xdim;
+            this.sourceVx[i] = vx;
+            this.sourceVy[i] = vy;
+        }
+    }
+
+    /**
+     * @description Remove da lista os grupos de Entrada cujas células foram todas apagadas por
+     * fora (borracha, apagar seleção, "Limpar") — evita que o marcador/seta fique "fantasma"
+     * apontando pra um lugar que não é mais Entrada.
+     */
+    pruneStaleSourceGroups() {
+        this.sourceGroups = this.sourceGroups.filter(group =>
+            group.cells.some(({
+                x,
+                y
+            }) => this.cellType[x + y * this.xdim] === FluidSolver.CELL_TYPE.SOURCE)
+        );
+    }
+
+    /**
      * @description Registra um novo corpo giratório a partir das células já pintadas como
      * ROTOR (a forma em si é desenhada pelas ferramentas normais, via `setCell`). Se `pivot`
      * não for informado, usa o centróide das células desenhadas; passando `pivot` explícito
@@ -118,8 +207,13 @@ export class FluidSolver {
      * derivado da própria forma (soma de dx²+dy² a partir do pivô, "massa" unitária por
      * célula) em vez de ser uma constante global — do contrário uma turbina grande e uma
      * palheta pequena não teriam como conviver com o mesmo ajuste de sensibilidade.
+     *
+     * `options.massMultiplier/damping/stiffness` ficam guardados NESTE corpo (não mais
+     * parâmetros globais de `step()`) — cada Rotor tem seu próprio ajuste, então dois corpos
+     * na mesma cena podem se comportar de forma independente (um turbina livre, outro palheta
+     * elástica, por exemplo).
      */
-    addRotatingBody(cells, pivot) {
+    addRotatingBody(cells, pivot, options = {}, replaceIndex = -1) {
         if (!cells || cells.length === 0) return;
         let pivotX, pivotY;
         if (pivot) {
@@ -129,9 +223,9 @@ export class FluidSolver {
             let sumX = 0,
                 sumY = 0;
             for (const {
-                    x,
-                    y
-                } of cells) {
+                x,
+                y
+            } of cells) {
                 sumX += x;
                 sumY += y;
             }
@@ -153,7 +247,7 @@ export class FluidSolver {
                 dy
             };
         });
-        this.rotatingBodies.push({
+        const body = {
             pivotX,
             pivotY,
             localCells,
@@ -165,8 +259,41 @@ export class FluidSolver {
             omega: 0,
             restingAngle: 0,
             momentOfInertia: Math.max(1, momentOfInertia),
-            maxRadius: Math.max(1, maxRadius)
-        });
+            maxRadius: Math.max(1, maxRadius),
+            massMultiplier: options.massMultiplier ?? 1,
+            damping: options.damping ?? 0.05,
+            stiffness: options.stiffness ?? 0
+        };
+        // Reformar um Rotor já existente (arrastar um handle de stretch/mover) substitui a
+        // entrada no lugar — nunca um push duplicado, senão o corpo antigo continuaria vivo e
+        // sendo simulado ao lado do novo. angle/omega sempre reiniciam em 0 (não há uma forma
+        // limpa de "continuar girando" através de uma mudança de geometria).
+        if (replaceIndex >= 0 && replaceIndex < this.rotatingBodies.length) {
+            this.rotatingBodies[replaceIndex] = body;
+        } else {
+            this.rotatingBodies.push(body);
+        }
+    }
+
+    /**
+     * @description Reestampa as células de cada corpo giratório como ROTOR na grade — usado
+     * depois de restaurar `rotatingBodies[]` (undo/redo, importar configuração), já que essas
+     * células não fazem parte de `rawCellType`/`shapes[]` (a rasterização normal do app pula
+     * Rotor de propósito, ver `_rasterizeShapes` em FluidSimulationApp.js) e por isso não
+     * seriam repintadas sozinhas.
+     */
+    stampRotatingBodiesOntoGrid() {
+        for (let i = 0; i < this.rotatingBodies.length; i++) {
+            const body = this.rotatingBodies[i];
+            for (const { x, y } of body.currentCells) {
+                if (x < 0 || x >= this.xdim || y < 0 || y >= this.ydim) continue;
+                const idx = x + y * this.xdim;
+                this.cellType[idx] = FluidSolver.CELL_TYPE.ROTOR;
+                this.rotorWallVx[idx] = -body.omega * (y - body.pivotY);
+                this.rotorWallVy[idx] = body.omega * (x - body.pivotX);
+                this.rotorBodyIndex[idx] = i;
+            }
+        }
     }
 
     /**
@@ -218,8 +345,11 @@ export class FluidSolver {
      * isso que faz o Rotor realmente soprar/arrastar o fluido adjacente, não só receber torque
      * dele). Roda logo após `stream()` (bounce-back já aplicado, distribuições pós-choque
      * disponíveis) e antes de `setBoundaries()`.
+     *
+     * `massMultiplier`/`damping`/`stiffness` são lidos de CADA corpo (não mais parâmetros
+     * globais) — cada Rotor tem seu próprio ajuste.
      */
-    _updateRotatingBodies(massMultiplier, damping, stiffness) {
+    _updateRotatingBodies() {
         const xdim = this.xdim,
             ydim = this.ydim;
         const survivingBodies = [];
@@ -241,8 +371,8 @@ export class FluidSolver {
             // comentário em `stream()` sobre por que essa separação é obrigatória.
             const torque = this._rotorTorqueAccum[oldIndex] || 0;
 
-            const effectiveInertia = Math.max(1e-6, massMultiplier * body.momentOfInertia);
-            body.omega += torque / effectiveInertia - damping * body.omega - stiffness * (body.angle - body.restingAngle);
+            const effectiveInertia = Math.max(1e-6, body.massMultiplier * body.momentOfInertia);
+            body.omega += torque / effectiveInertia - body.damping * body.omega - body.stiffness * (body.angle - body.restingAngle);
             // Duplo propósito neste limite: (1) geométrico — a forma só é rerrasterizada 1x por
             // passo, sem sub-stepping, então a ponta não pode saltar mais que uma fração de
             // célula; (2) estabilidade numérica — a velocidade de ponta (ω×raio) agora também
@@ -258,9 +388,9 @@ export class FluidSolver {
             const newCells = [];
             const newKeys = new Set();
             for (const {
-                    dx,
-                    dy
-                } of body.localCells) {
+                dx,
+                dy
+            } of body.localCells) {
                 const gx = Math.round(body.pivotX + dx * cosA - dy * sinA);
                 const gy = Math.round(body.pivotY + dx * sinA + dy * cosA);
                 if (gx < 0 || gx >= xdim || gy < 0 || gy >= ydim) continue;
@@ -277,9 +407,9 @@ export class FluidSolver {
             // nunca limpar cegamente: corpos podem se sobrepor, ou o usuário pode ter pintado
             // uma Barreira em cima entre passos.
             for (const {
-                    x,
-                    y
-                } of body.currentCells) {
+                x,
+                y
+            } of body.currentCells) {
                 if (newKeys.has(x + ',' + y)) continue;
                 const i = x + y * xdim;
                 if (this.cellType[i] !== FluidSolver.CELL_TYPE.ROTOR) continue;
@@ -292,9 +422,9 @@ export class FluidSolver {
 
             const newBodyIndex = survivingBodies.length - 1;
             for (const {
-                    x,
-                    y
-                } of newCells) {
+                x,
+                y
+            } of newCells) {
                 const i = x + y * xdim;
                 this.cellType[i] = FluidSolver.CELL_TYPE.ROTOR;
                 // Velocidade local da "parede" nesta célula: ω×r, r = célula - pivô.
@@ -336,6 +466,21 @@ export class FluidSolver {
         for (let i = 0; i < this.xdim * this.ydim; i++) {
             this.setEquilibrium(i % this.xdim, Math.floor(i / this.xdim), u0, 0, 1);
         }
+        if (this.rotatingBodies) {
+            for (const body of this.rotatingBodies) {
+                // Volta o rotor à posição de repouso: zera ângulo/velocidade e reconstrói
+                // currentCells a partir de localCells no ângulo 0 — sem isso,
+                // stampRotatingBodiesOntoGrid() estamparia as células na posição rotacionada
+                // enquanto hasEverStepped=false faz o overlay vetorial desenhar a linha na
+                // posição original, gerando duas linhas visíveis (bugs.md #42).
+                body.angle = 0;
+                body.omega = 0;
+                body.currentCells = body.localCells.map(({ dx, dy }) => ({
+                    x: Math.round(body.pivotX + dx),
+                    y: Math.round(body.pivotY + dy)
+                }));
+            }
+        }
     }
 
     initTracers(enabled) {
@@ -376,10 +521,7 @@ export class FluidSolver {
     step({
         u0,
         viscosity,
-        moveTracers,
-        rotorMassMultiplier = 1,
-        rotorDamping = 0.05,
-        rotorStiffness = 0
+        moveTracers
     }) {
         if (this._sinkGeometryDirty) {
             this._recomputeSinkDamping();
@@ -388,7 +530,7 @@ export class FluidSolver {
         this.collide(viscosity);
         this.stream();
         if (this.rotatingBodies.length > 0) {
-            this._updateRotatingBodies(rotorMassMultiplier, rotorDamping, rotorStiffness);
+            this._updateRotatingBodies();
         }
         this.setBoundaries(u0);
         this._applySourcesAndSinks();
@@ -456,7 +598,15 @@ export class FluidSolver {
         const RAMP = FluidSolver.SINK_RAMP_CELLS;
         const MAX_DAMPING = FluidSolver.SINK_MAX_DAMPING;
         for (let i = 0; i < size; i++) {
-            if (depth[i] > 0) {
+            if (depth[i] === 1) {
+                // Célula de borda da Saída (tem pelo menos um vizinho não-SINK) — recebe
+                // absorção máxima. Antes recebia (1/RAMP)×MAX=0.11 (muito fraco), o que fazia
+                // uma Saída fina (1 célula) não absorver o bastante e o fluxo desviar em volta
+                // em vez de atravessá-la — exatamente o comportamento de obstáculo que a rampa
+                // foi criada para evitar (bugs.md #44). A rampa ainda protege as células
+                // interiores profundas (depth>1) dentro de regiões espessas.
+                this.sinkDamping[i] = MAX_DAMPING;
+            } else if (depth[i] > 1) {
                 this.sinkDamping[i] = Math.min(MAX_DAMPING, (depth[i] / RAMP) * MAX_DAMPING);
             }
         }
@@ -543,14 +693,11 @@ export class FluidSolver {
 
     /**
      * @private
-     * @description Impõe a velocidade das células SOURCE (entradas pintadas) e modela as
-     * células SINK (saídas) como um poço de baixa pressão: a densidade é puxada em rampa até
-     * `SINK_TARGET_RHO`, mas a velocidade local NÃO é tocada. Amortecer a velocidade (versão
-     * anterior) faz a célula resistir ao que chega, e qualquer região resistiva que não
-     * atravesse o domínio de parede a parede faz o fluxo desviar pelas bordas livres — o mesmo
-     * efeito de um obstáculo. Reduzir só a densidade cria um gradiente de pressão real que o
-     * próprio `collide()`/`stream()` já usa para puxar o fluido vizinho para dentro (sucção),
-     * em vez de empurrá-lo para os lados.
+     * @description Impõe a velocidade das células SOURCE (entradas pintadas).
+     * Células SINK (saídas) são ignoradas pela física (tratadas como NORMAL), sendo
+     * perfeitamente transparentes ao fluxo (sem efeito barreira, sem sucção). O efeito
+     * de "ralo" é puramente visual: as partículas (fumaça e setas) desaparecem ao
+     * tocar no SINK (ver moveTracers e moveDyeTracers).
      */
     _applySourcesAndSinks() {
         for (let i = 0; i < this.xdim * this.ydim; i++) {
@@ -558,13 +705,6 @@ export class FluidSolver {
                 const x = i % this.xdim,
                     y = Math.floor(i / this.xdim);
                 this.setEquilibrium(x, y, this.sourceVx[i], this.sourceVy[i], 1);
-            } else if (this.cellType[i] === FluidSolver.CELL_TYPE.SINK) {
-                const damping = this.sinkDamping[i];
-                if (damping <= 0) continue;
-                const x = i % this.xdim,
-                    y = Math.floor(i / this.xdim);
-                const newRho = this.rho[i] - (this.rho[i] - FluidSolver.SINK_TARGET_RHO) * damping;
-                this.setEquilibrium(x, y, this.ux[i], this.uy[i], newRho);
             }
         }
     }

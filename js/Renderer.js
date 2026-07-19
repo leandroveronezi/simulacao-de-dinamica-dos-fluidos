@@ -1,4 +1,4 @@
-import { FluidSolver } from './FluidSolver.js';
+import { FluidSolver } from './FluidSolver.js?v=20260713p';
 
 /**
  * @class Renderer
@@ -102,39 +102,69 @@ export class Renderer {
                 const index = x + y * solver.xdim;
                 let r, g, b;
 
-                if (solver.cellType[index] === FluidSolver.CELL_TYPE.BARRIER) {
-                    r = 0;
-                    g = 0;
-                    b = 0;
-                } else if (solver.cellType[index] === FluidSolver.CELL_TYPE.SOURCE) {
+                // Célula coberta por uma forma vetorial tipo 'line' (ver
+                // FluidSimulationApp._rasterizeShapes/lineCellMask): pula o preenchimento
+                // quadriculado sólido aqui — o traço vetorial suave (drawSmoothLineShapes,
+                // desenhado por cima) é a ÚNICA representação visual dessa célula. Sem "verdade
+                // quadriculada" nenhuma por baixo, não tem canto de degrau pra vazar além do
+                // traço, então a espessura escolhida (mesmo fina) nunca mostra espinho.
+                const isSmoothedLine = viewState.lineCellMask && viewState.lineCellMask[index] === 1;
+
+                if (!isSmoothedLine && solver.cellType[index] === FluidSolver.CELL_TYPE.BARRIER) {
+                    // Cinza-escuro "de aço" — branco puro se perderia contra o fundo claro do
+                    // repouso (item 7 do plano premium: fluido parado funde com o canvas, agora
+                    // claro em vez de escuro).
+                    r = 28;
+                    g = 37;
+                    b = 48;
+                } else if (!isSmoothedLine && solver.cellType[index] === FluidSolver.CELL_TYPE.SOURCE) {
                     r = 56;
                     g = 189;
                     b = 248;
-                } else if (solver.cellType[index] === FluidSolver.CELL_TYPE.SINK) {
+                } else if (!isSmoothedLine && solver.cellType[index] === FluidSolver.CELL_TYPE.SINK) {
                     r = 255;
                     g = 93;
                     b = 93;
-                } else if (solver.cellType[index] === FluidSolver.CELL_TYPE.ROTOR) {
+                } else if (!isSmoothedLine && solver.cellType[index] === FluidSolver.CELL_TYPE.ROTOR) {
                     r = 167;
                     g = 139;
                     b = 250;
+                } else if (!viewState.hasEverStepped) {
+                    // Grade "de fábrica", nunca rodada — fica neutra (cor do fundo do app), não
+                    // com a ponta azul da paleta ainda: ligar zero=azul só faz sentido quando
+                    // zero é um RESULTADO da simulação, não um estado que ela nem começou a
+                    // calcular. Assim que passar 1 passo (hasEverStepped), some pra sempre em
+                    // favor da paleta completa, mesmo pausando depois.
+                    r = 238;
+                    g = 241;
+                    b = 245;
                 } else {
+                    // Todo modo usa magnitude (valor absoluto), não desvio com sinal — zero
+                    // sempre cai na ponta azul da paleta (cIndex=0), o máximo sempre na ponta
+                    // vermelha (cIndex=N), igual "Velocidade (módulo)" já fazia (por isso ele
+                    // sempre pareceu "cheio": zero já É a cor mais fria da paleta, não precisa de
+                    // nenhum truque de fundir com o fundo pra ficar calmo em repouso). Isso
+                    // troca a informação de SINAL (giro horário vs anti-horário no Curl, direita
+                    // vs esquerda em Vel. X, etc.) por cobertura de grade cheia + zero=extremo da
+                    // legenda em todo modo — sem manchas brancas nunca.
                     let value;
                     switch (plotType) {
                         case 0:
+                            // Densidade/Pressão mapeada linearmente (não-absoluto).
+                            // rho = 1 fica no meio (0.5). Valores < 1 caem para azul, > 1 sobem para vermelho.
                             value = (solver.rho[index] - 1) * 6 * contrast + 0.5;
                             break;
                         case 1:
-                            value = solver.ux[index] * 2 * contrast + 0.5;
+                            value = Math.abs(solver.ux[index]) * 4 * contrast;
                             break;
                         case 2:
-                            value = solver.uy[index] * 2 * contrast + 0.5;
+                            value = Math.abs(solver.uy[index]) * 4 * contrast;
                             break;
                         case 3:
                             value = Math.sqrt(solver.ux[index] ** 2 + solver.uy[index] ** 2) * 4 * contrast;
                             break;
                         case 4:
-                            value = solver.curl[index] * 5 * contrast + 0.5;
+                            value = Math.abs(solver.curl[index]) * 10 * contrast;
                             break;
                     }
                     const cIndex = Math.max(0, Math.min(Renderer.N_COLORS, Math.round(Renderer.N_COLORS * value)));
@@ -180,10 +210,14 @@ export class Renderer {
         this.context.scale(zoom, zoom);
 
         this.context.drawImage(this.offscreenCanvas, 0, 0);
-        this.drawDyeSources(solver, pxPerSquare);
+        this.drawSmoothLineShapes(viewState.shapes, solver.ydim, pxPerSquare, viewState.hasEverStepped);
+        this.drawDyeSources(solver, pxPerSquare, viewState.selectedDyeSourceIndex, viewState.draggingDyeSource);
         this.drawDyeTracers(solver, pxPerSquare);
-        this.drawRotorPivots(solver, pxPerSquare);
+        this.drawRotorPivots(solver, pxPerSquare, viewState.selectedRotorIndex, viewState.draggingRotorPivot);
+        this.drawSourceGroupHandles(solver, pxPerSquare, solver.ydim, viewState.editingSourceGroupIndex);
+        this.drawShapeSelection(viewState.shapes, viewState.selectedShapeIndex, solver.ydim, pxPerSquare);
         if (viewState.showTracers) this.drawTracers(solver, pxPerSquare);
+        if (viewState.showArrows && viewState.hasEverStepped) this.drawVelocityArrows(solver, pxPerSquare);
         if (viewState.showForce && solver.barrierCount > 0) {
             this.drawForceArrow(
                 solver.barrierxSum / solver.barrierCount,
@@ -288,9 +322,10 @@ export class Renderer {
         }
         this.context.fillStyle = gradient;
         this.context.fillRect(legendX, legendY, legendWidth, legendHeight);
-        this.context.strokeStyle = 'rgba(255,255,255,0.7)';
+        const inkColor = getComputedStyle(document.documentElement).getPropertyValue('--ink').trim();
+        this.context.strokeStyle = inkColor;
         this.context.strokeRect(legendX, legendY, legendWidth, legendHeight);
-        this.context.fillStyle = 'white';
+        this.context.fillStyle = inkColor;
         this.context.font = '11px sans-serif';
         this.context.textAlign = 'center';
         this.context.fillText(viewState.plotLabel, legendX + legendWidth / 2, legendY - 10);
@@ -331,8 +366,20 @@ export class Renderer {
         this.context.strokeStyle = "rgba(0, 0, 0, 0.65)";
         this.context.lineWidth = 1;
         for (let t = 0; t < FluidSolver.N_TRACERS; t++) {
-            const cX = (solver.tracerX[t] + 0.5) * pxPerSquare;
-            const cY = (solver.ydim - (solver.tracerY[t] + 0.5)) * pxPerSquare;
+            const tx = solver.tracerX[t], ty = solver.tracerY[t];
+            // Traçadores nascem numa grade uniforme (initTracers), sem checar o tipo de célula —
+            // e continuam ali até a simulação rodar e a física de movimento os afastar. Um
+            // traçador que caia em cima de uma Barreira/Rotor/Entrada/Saída/Válvula fica visível
+            // como um pontinho branco solto por cima da forma sólida até isso acontecer (ou pra
+            // sempre, se a forma foi desenhada DEPOIS do traçador já existir ali). Como isso é
+            // puramente visual — não interfere na física, só decide o que desenhar — pula o
+            // desenho enquanto a célula atual não for NORMAL, sem mexer no estado do traçador.
+            const gx = Math.floor(tx), gy = Math.floor(ty);
+            if (gx >= 0 && gx < solver.xdim && gy >= 0 && gy < solver.ydim) {
+                if (solver.cellType[gx + gy * solver.xdim] !== FluidSolver.CELL_TYPE.NORMAL) continue;
+            }
+            const cX = (tx + 0.5) * pxPerSquare;
+            const cY = (solver.ydim - (ty + 0.5)) * pxPerSquare;
             this.context.beginPath();
             this.context.arc(cX, cY, radius, 0, 2 * Math.PI);
             this.context.fill();
@@ -343,32 +390,349 @@ export class Renderer {
     /**
      * @description Marca o pivô de cada corpo giratório com um pontinho — puramente visual,
      * lido de `body.pivotX/pivotY` (nunca gravado em `cellType`), então não interfere na física
-     * nem bloqueia traçadores/fumaça.
+     * nem bloqueia traçadores/fumaça. O corpo em `selectedIndex` (se houver) ganha um anel de
+     * destaque na cor de acento, pra indicar qual está com o painel de propriedades aberto.
      */
-    drawRotorPivots(solver, pxPerSquare) {
+    drawRotorPivots(solver, pxPerSquare, selectedIndex = -1, dragOverride = null) {
         if (!solver.rotatingBodies || solver.rotatingBodies.length === 0) return;
         const radius = Math.max(2, pxPerSquare * 0.35);
-        this.context.fillStyle = "rgba(167, 139, 250, 0.95)";
-        this.context.strokeStyle = "rgba(255, 255, 255, 0.9)";
-        this.context.lineWidth = 1;
-        for (const body of solver.rotatingBodies) {
-            const cX = (body.pivotX + 0.5) * pxPerSquare;
-            const cY = (solver.ydim - (body.pivotY + 0.5)) * pxPerSquare;
+        for (let i = 0; i < solver.rotatingBodies.length; i++) {
+            const body = solver.rotatingBodies[i];
+            // Enquanto o pivô está sendo arrastado, desenha na posição do mouse em vez da
+            // salva — nada de física muda até soltar (ver _handleMouseUp em FluidSimulationApp).
+            const useDrag = dragOverride && dragOverride.bodyIndex === i;
+            const pivotX = useDrag ? dragOverride.x : body.pivotX;
+            const pivotY = useDrag ? dragOverride.y : body.pivotY;
+            const cX = (pivotX + 0.5) * pxPerSquare;
+            const cY = (solver.ydim - (pivotY + 0.5)) * pxPerSquare;
+            const isSelected = i === selectedIndex;
+            this.context.fillStyle = "rgba(167, 139, 250, 0.95)";
+            this.context.strokeStyle = isSelected ? "rgba(255, 180, 84, 1)" : "rgba(28, 37, 48, 0.85)";
+            this.context.lineWidth = isSelected ? 2 : 1;
             this.context.beginPath();
-            this.context.arc(cX, cY, radius, 0, 2 * Math.PI);
+            this.context.arc(cX, cY, isSelected ? radius * 1.6 : radius, 0, 2 * Math.PI);
             this.context.fill();
             this.context.stroke();
         }
     }
 
-    drawDyeSources(solver, pxPerSquare) {
-        this.context.fillStyle = "rgba(200, 200, 255, 0.7)";
-        for (const source of solver.dyeSources) {
-            const cX = (source.x + 0.5) * pxPerSquare;
-            const cY = (solver.ydim - (source.y + 0.5)) * pxPerSquare;
+    /**
+     * @description Contorno suave (anti-aliasing nativo do Canvas) por cima de cada forma
+     * vetorial — a física continua discretizada em células (degraus, inerente à grade), mas
+     * visualmente qualquer Barreira/Entrada/Saída fica lisa em vez de serrilhada (bug 26).
+     *
+     * • 'line'              → lineTo direto (já implementado antes)
+     * • 'rectangle_outline',
+     *   'rectangle_filled'  → strokeRect
+     * • 'ellipse_outline',
+     *   'ellipse_filled'    → arc (elipse via escala)
+     * • 'rounded_rectangle' → arcTo em cada canto
+     * • 'region'            → stroke ao redor do bounding-box das células (marching-border
+     *                         simplificado: desenha o outline externo da região combinado com
+     *                         o contorno do bounding box para suavizar as bordas visíveis)
+     *
+     * Rotor fica de fora depois do primeiro passo físico: `shape.x0/y0/x1/y1` é a geometria
+     * de REPOUSO, que não acompanha a rotação ao vivo.
+     */
+    drawSmoothLineShapes(shapes, ydim, pxPerSquare, hasEverStepped) {
+        if (!shapes || shapes.length === 0) return;
+        const colorByType = {
+            [FluidSolver.CELL_TYPE.BARRIER]: 'rgb(28, 37, 48)',
+            [FluidSolver.CELL_TYPE.SOURCE]: 'rgb(56, 189, 248)',
+            [FluidSolver.CELL_TYPE.SINK]: 'rgb(255, 93, 93)',
+            [FluidSolver.CELL_TYPE.ROTOR]: 'rgb(167, 139, 250)',
+            [FluidSolver.CELL_TYPE.VALVE]: 'rgb(34, 197, 94)'
+        };
+        this.context.save();
+        this.context.lineCap = 'round';
+        this.context.lineJoin = 'round';
+
+        for (const shape of shapes) {
+            if (shape.cellType === FluidSolver.CELL_TYPE.ROTOR && hasEverStepped) continue;
+
+            // Entrada fechada (bugs.md #38) e Válvula aberta (bugs.md #40) não são parede — a
+            // célula física vira NORMAL (fluxo atravessa reto). Visualmente marca só com a
+            // mesma cor bem apagada, pra ainda dar pra achar/reabrir sem parecer uma barreira
+            // sólida. Saída fechada (bugs.md #39) e Válvula fechada (padrão de nascença, bugs.md
+            // #40) viram BARRIER de verdade — desenha em opacidade cheia, como uma parede.
+            let isPassage = false;
+            if (shape.cellType === FluidSolver.CELL_TYPE.SOURCE) {
+                isPassage = shape.enabled === false;
+            } else if (shape.cellType === FluidSolver.CELL_TYPE.VALVE) {
+                isPassage = shape.enabled === true;
+            }
+            const color = colorByType[shape.cellType];
+            if (!color) continue;
+            this.context.globalAlpha = isPassage ? 0.35 : 1;
+
+            const lw = (shape.lineWidth ?? 1.75) * pxPerSquare;
+            this.context.strokeStyle = color;
+            this.context.fillStyle = color;
+            this.context.lineWidth = lw;
             this.context.beginPath();
-            this.context.arc(cX, cY, 3, 0, 2 * Math.PI);
+
+            // Converte coordenadas de célula para pixels do canvas.
+            // Centro da célula (x,y) está em pixel ((x+0.5)*px, (ydim-1-y+0.5)*px).
+            // Para contornos de forma, usa a borda exterior da célula mais extrema.
+            const x0c = Math.min(shape.x0, shape.x1);
+            const x1c = Math.max(shape.x0, shape.x1);
+            const y0c = Math.min(shape.y0, shape.y1);
+            const y1c = Math.max(shape.y0, shape.y1);
+
+            // Pixel do canto superior-esquerdo da célula (x0c, y1c) e inferior-direito de (x1c, y0c)
+            const px0 = x0c * pxPerSquare;
+            const py0 = (ydim - 1 - y1c) * pxPerSquare;
+            const pw  = (x1c - x0c + 1) * pxPerSquare;
+            const ph  = (y1c - y0c + 1) * pxPerSquare;
+
+            switch (shape.tool) {
+                case 'line': {
+                    const s = this._gridToCanvas(shape.x0, shape.y0, ydim, pxPerSquare);
+                    const e = this._gridToCanvas(shape.x1, shape.y1, ydim, pxPerSquare);
+                    this.context.moveTo(s.x, s.y);
+                    this.context.lineTo(e.x, e.y);
+                    this.context.stroke();
+                    break;
+                }
+
+                case 'rectangle_outline':
+                    this.context.strokeRect(px0, py0, pw, ph);
+                    break;
+
+                case 'rectangle_filled':
+                    this.context.fillRect(px0, py0, pw, ph);
+                    break;
+
+                case 'ellipse_outline':
+                case 'ellipse_filled': {
+                    const cx = px0 + pw / 2;
+                    const cy = py0 + ph / 2;
+                    const rx = pw / 2;
+                    const ry = ph / 2;
+                    this.context.ellipse(cx, cy, rx, ry, 0, 0, 2 * Math.PI);
+                    if (shape.tool === 'ellipse_filled') {
+                        this.context.fill();
+                    } else {
+                        this.context.stroke();
+                    }
+                    break;
+                }
+
+                case 'rounded_rectangle': {
+                    const rr = Math.max(1, Math.floor(Math.min(x1c - x0c, y1c - y0c) * 0.2)) * pxPerSquare;
+                    const rx2 = px0 + rr, ry2 = py0 + rr;
+                    const rx3 = px0 + pw - rr, ry3 = py0 + ph - rr;
+                    this.context.moveTo(rx2, py0);
+                    this.context.lineTo(rx3, py0);
+                    this.context.arcTo(px0 + pw, py0, px0 + pw, ry2, rr);
+                    this.context.lineTo(px0 + pw, ry3);
+                    this.context.arcTo(px0 + pw, py0 + ph, rx3, py0 + ph, rr);
+                    this.context.lineTo(rx2, py0 + ph);
+                    this.context.arcTo(px0, py0 + ph, px0, ry3, rr);
+                    this.context.lineTo(px0, ry2);
+                    this.context.arcTo(px0, py0, rx2, py0, rr);
+                    this.context.closePath();
+                    this.context.stroke();
+                    break;
+                }
+
+                case 'region': {
+                    // Fonte de verdade geométrica: `shape.rings` (polígono resultante de uma
+                    // operação booleana via Clipper — ver FluidSimulationApp._clipperBoolean,
+                    // bugs.md #45). Desenha direto via moveTo/lineTo por anel + UM fill('evenodd')
+                    // no final — o Canvas já sabe lidar com múltiplos sub-contornos/furos com essa
+                    // regra, sem precisar de traçador de marching-squares nem overlay separado.
+                    if (shape.rings && shape.rings.length > 0) {
+                        this.context.beginPath();
+                        for (const ring of shape.rings) {
+                            if (ring.length === 0) continue;
+                            const p0 = this._gridToCanvas(shape.x0 + ring[0].dx, shape.y0 + ring[0].dy, ydim, pxPerSquare);
+                            this.context.moveTo(p0.x, p0.y);
+                            for (let i = 1; i < ring.length; i++) {
+                                const p = this._gridToCanvas(shape.x0 + ring[i].dx, shape.y0 + ring[i].dy, ydim, pxPerSquare);
+                                this.context.lineTo(p.x, p.y);
+                            }
+                            this.context.closePath();
+                        }
+                        this.context.fillStyle = color;
+                        this.context.fill('evenodd');
+                        break;
+                    }
+
+                    // Fallback de compatibilidade: forma `region` salva ANTES do Clipper existir
+                    // (sem `rings`) — traçador de marching-squares puro, sem overlay de
+                    // `smoothLines` (mecanismo removido, ver bugs.md #45). Serrilhado, mas
+                    // funcional, até o usuário editar a forma de novo.
+                    if (!shape.cells || shape.cells.length === 0) break;
+
+                    const cellSet = new Set();
+                    for (const { dx, dy } of shape.cells) {
+                        cellSet.add(`${shape.x0 + dx},${shape.y0 + dy}`);
+                    }
+
+                    // Arestas dirigidas: chave = "x1,y1" → [x2, y2]
+                    // Pode haver mais de uma aresta saindo do mesmo vértice (T-junções),
+                    // então usa Map de vértice → lista de destinos.
+                    const outEdges = new Map(); // "x,y" -> [[x2,y2], ...]
+                    const addEdge = (x1, y1, x2, y2) => {
+                        const k = `${x1},${y1}`;
+                        if (!outEdges.has(k)) outEdges.set(k, []);
+                        outEdges.get(k).push([x2, y2]);
+                    };
+
+                    const px = pxPerSquare;
+                    for (const { dx, dy } of shape.cells) {
+                        const cx = shape.x0 + dx;
+                        const cy = shape.y0 + dy;
+                        // Cantos da célula em espaço canvas (y do canvas cresce para baixo):
+                        //   L = cx*px,  R = (cx+1)*px
+                        //   T = (ydim-1-cy)*px  (topo no canvas = y alto no grid)
+                        //   B = (ydim-cy)*px
+                        const cL = cx * px,      cR = (cx + 1) * px;
+                        const cT = (ydim - 1 - cy) * px,  cB = (ydim - cy) * px;
+
+                        // Aresta superior (grid +y ausente): L,T → R,T
+                        if (!cellSet.has(`${cx},${cy + 1}`)) addEdge(cL, cT, cR, cT);
+                        // Aresta direita  (grid +x ausente): R,T → R,B
+                        if (!cellSet.has(`${cx + 1},${cy}`)) addEdge(cR, cT, cR, cB);
+                        // Aresta inferior (grid -y ausente): R,B → L,B
+                        if (!cellSet.has(`${cx},${cy - 1}`)) addEdge(cR, cB, cL, cB);
+                        // Aresta esquerda (grid -x ausente): L,B → L,T
+                        if (!cellSet.has(`${cx - 1},${cy}`)) addEdge(cL, cB, cL, cT);
+                    }
+
+                    // Percorre polígonos fechados a partir das arestas não visitadas
+                    const usedEdges = new Set();
+                    this.context.lineWidth = Math.max(1, pxPerSquare * 0.7);
+                    this.context.strokeStyle = color;
+                    this.context.lineJoin = 'round';
+
+                    for (const [startKey] of outEdges) {
+                        const startDests = outEdges.get(startKey);
+                        for (let ei = 0; ei < startDests.length; ei++) {
+                            const firstEdgeKey = `${startKey}→${startDests[ei][0]},${startDests[ei][1]}`;
+                            if (usedEdges.has(firstEdgeKey)) continue;
+
+                            // Inicia um novo polígono
+                            const [sx, sy] = startKey.split(',').map(Number);
+                            this.context.beginPath();
+                            this.context.moveTo(sx, sy);
+
+                            let curVertKey = startKey;
+                            let curDest = startDests[ei];
+                            let guard = outEdges.size * 4 + 4;
+
+                            while (guard-- > 0) {
+                                const edgeKey = `${curVertKey}→${curDest[0]},${curDest[1]}`;
+                                if (usedEdges.has(edgeKey)) break;
+                                usedEdges.add(edgeKey);
+                                this.context.lineTo(curDest[0], curDest[1]);
+
+                                const nextKey = `${curDest[0]},${curDest[1]}`;
+                                if (nextKey === startKey) break; // polígono fechado
+                                const nextDests = outEdges.get(nextKey);
+                                if (!nextDests) break;
+                                // Escolhe a próxima aresta ainda não usada
+                                const nextEdge = nextDests.find(e => !usedEdges.has(`${nextKey}→${e[0]},${e[1]}`));
+                                if (!nextEdge) break;
+                                curVertKey = nextKey;
+                                curDest = nextEdge;
+                            }
+
+                            this.context.closePath();
+                            this.context.stroke();
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        this.context.restore();
+    }
+
+    /**
+     * @description Retângulo envolvente tracejado + 2 handles (x0,y0 e x1,y1) da forma vetorial
+     * selecionada — mesma chamada serve tanto pra indicar a seleção em repouso quanto pra
+     * mostrar o arraste ao vivo (stretch/mover), já que ambos só leem `shapes[selectedShapeIndex]`
+     * no estado atual, sem precisar de um mecanismo de preview separado.
+     */
+    drawShapeSelection(shapes, selectedShapeIndex, ydim, pxPerSquare) {
+        if (selectedShapeIndex < 0 || !shapes || !shapes[selectedShapeIndex]) return;
+        const shape = shapes[selectedShapeIndex];
+        const x0 = Math.min(shape.x0, shape.x1),
+            x1 = Math.max(shape.x0, shape.x1);
+        const y0 = Math.min(shape.y0, shape.y1),
+            y1 = Math.max(shape.y0, shape.y1);
+        const boxX = x0 * pxPerSquare;
+        const boxY = (ydim - 1 - y1) * pxPerSquare;
+        const boxW = (x1 - x0 + 1) * pxPerSquare;
+        const boxH = (y1 - y0 + 1) * pxPerSquare;
+
+        this.context.save();
+        this.context.strokeStyle = "rgba(255, 180, 84, 0.9)";
+        this.context.lineWidth = 1.5;
+        this.context.setLineDash([5, 3]);
+        this.context.strokeRect(boxX, boxY, boxW, boxH);
+        this.context.setLineDash([]);
+
+        // Região (preenchimento fundido, geometria livre) só move o corpo inteiro — sem pontas
+        // de esticar pra desenhar, já que não há um "x0y0"/"x1y1" editável de verdade nela.
+        if (shape.tool === 'region') {
+            this.context.restore();
+            return;
+        }
+
+        const handleRadius = Math.max(3, pxPerSquare * 0.5);
+        this.context.fillStyle = "rgba(255, 180, 84, 1)";
+        this.context.strokeStyle = "rgba(28, 37, 48, 0.85)";
+        this.context.lineWidth = 1.5;
+        for (const p of [
+                this._gridToCanvas(shape.x0, shape.y0, ydim, pxPerSquare),
+                this._gridToCanvas(shape.x1, shape.y1, ydim, pxPerSquare)
+            ]) {
+            this.context.beginPath();
+            this.context.arc(p.x, p.y, handleRadius, 0, 2 * Math.PI);
             this.context.fill();
+            this.context.stroke();
+        }
+        this.context.restore();
+    }
+
+    drawDyeSources(solver, pxPerSquare, selectedIndex = -1, dragOverride = null) {
+        const radius = Math.max(4, pxPerSquare * 0.6);
+        for (let i = 0; i < solver.dyeSources.length; i++) {
+            const source = solver.dyeSources[i];
+            const useDrag = dragOverride && dragOverride.index === i;
+            const sx = useDrag ? dragOverride.x : source.x;
+            const sy = useDrag ? dragOverride.y : source.y;
+            const cX = (sx + 0.5) * pxPerSquare;
+            const cY = (solver.ydim - (sy + 0.5)) * pxPerSquare;
+            // Bug 24: cor vibrante laranja/âmbar com borda escura para alto contraste em
+            // qualquer fundo de canvas (cor anterior era rgba(200,200,255,0.7) — quase branca,
+            // desaparecia sobre o fundo claro do estado inicial).
+            if (i === selectedIndex) {
+                this.context.beginPath();
+                this.context.arc(cX, cY, radius * 1.7, 0, 2 * Math.PI);
+                this.context.strokeStyle = 'rgba(255, 180, 84, 1)';
+                this.context.lineWidth = 2;
+                this.context.stroke();
+            }
+            this.context.beginPath();
+            this.context.arc(cX, cY, radius, 0, 2 * Math.PI);
+            this.context.strokeStyle = 'rgba(28, 18, 0, 0.7)';
+            this.context.lineWidth = 2;
+            this.context.stroke();
+            this.context.fillStyle = '#f59e0b';
+            this.context.fill();
+            // Cruz interna para indicar que é uma fonte emissora
+            this.context.strokeStyle = 'rgba(28, 18, 0, 0.5)';
+            this.context.lineWidth = 1.5;
+            this.context.beginPath();
+            this.context.moveTo(cX - radius * 0.45, cY);
+            this.context.lineTo(cX + radius * 0.45, cY);
+            this.context.moveTo(cX, cY - radius * 0.45);
+            this.context.lineTo(cX, cY + radius * 0.45);
+            this.context.stroke();
         }
     }
 
@@ -383,6 +747,71 @@ export class Renderer {
             this.context.arc(cX, cY, radius, 0, 2 * Math.PI);
             this.context.fill();
         }
+    }
+
+    /**
+     * @description Campo esparso de setas de velocidade (direção real do escoamento em cada
+     * célula amostrada) — puramente cosmético, complementa o mapa de cor por magnitude (que,
+     * desde a troca pra módulo, não carrega mais sinal/direção). Amostra em grade espaçada
+     * (não célula a célula, senão vira ruído visual) e pula Barreira/Rotor (sem velocidade de
+     * escoamento própria ali).
+     */
+    drawVelocityArrows(solver, pxPerSquare) {
+        const stride = Math.max(4, Math.round(Math.min(solver.xdim, solver.ydim) / 24));
+        const maxLen = stride * pxPerSquare * 0.42;
+        const MIN_SPEED_TO_SHOW = 0.008;
+        const REF_SPEED = 0.12;
+        this.context.save();
+        this.context.lineCap = 'round';
+        this.context.lineJoin = 'round';
+        for (let gy = Math.floor(stride / 2); gy < solver.ydim; gy += stride) {
+            for (let gx = Math.floor(stride / 2); gx < solver.xdim; gx += stride) {
+                const i = gx + gy * solver.xdim;
+                const t = solver.cellType[i];
+                if (t === FluidSolver.CELL_TYPE.BARRIER || t === FluidSolver.CELL_TYPE.ROTOR) continue;
+                const ux = solver.ux[i],
+                    uy = solver.uy[i];
+                const speed = Math.sqrt(ux * ux + uy * uy);
+                if (speed < MIN_SPEED_TO_SHOW) continue;
+
+                const len = Math.min(maxLen, (speed / REF_SPEED) * maxLen);
+                const angle = Math.atan2(-uy, ux);
+                const c = this._gridToCanvas(gx, gy, solver.ydim, pxPerSquare);
+                const ex = c.x + Math.cos(angle) * len;
+                const ey = c.y + Math.sin(angle) * len;
+                const headLen = Math.max(3, len * 0.35);
+                const hx1 = ex - headLen * Math.cos(angle - Math.PI / 6),
+                    hy1 = ey - headLen * Math.sin(angle - Math.PI / 6);
+                const hx2 = ex - headLen * Math.cos(angle + Math.PI / 6),
+                    hy2 = ey - headLen * Math.sin(angle + Math.PI / 6);
+
+                // "Halo" escuro por baixo (mais grosso) + branco por cima (mais fino) — a seta
+                // inteira (haste + cabeça) fica visível em QUALQUER cor de fundo (do azul mais
+                // escuro da paleta ao amarelo mais claro), não só onde uma cor sólida contrasta.
+                // Sem o halo escuro, a haste (fina, 1px) ficava praticamente invisível em fundo
+                // escuro — sobrava só a cabeça branca "flutuando" sem rabo.
+                for (const pass of [
+                        { color: 'rgba(15,23,32,0.85)', stemWidth: 2.4 },
+                        { color: 'rgba(255,255,255,0.95)', stemWidth: 1 }
+                    ]) {
+                    this.context.strokeStyle = pass.color;
+                    this.context.fillStyle = pass.color;
+                    this.context.lineWidth = pass.stemWidth;
+                    this.context.beginPath();
+                    this.context.moveTo(c.x, c.y);
+                    this.context.lineTo(ex, ey);
+                    this.context.stroke();
+
+                    this.context.beginPath();
+                    this.context.moveTo(ex, ey);
+                    this.context.lineTo(hx1, hy1);
+                    this.context.lineTo(hx2, hy2);
+                    this.context.closePath();
+                    this.context.fill();
+                }
+            }
+        }
+        this.context.restore();
     }
 
     drawForceArrow(x, y, Fx, Fy, ydim, pxPerSquare) {
@@ -406,10 +835,11 @@ export class Renderer {
     }
 
     /**
-     * @description Desenha a seta arrastável usada para definir direção/velocidade de uma
-     * Entrada recém-desenhada. `vx`/`vy` estão em unidades de velocidade da simulação.
+     * @description Desenha a seta de direção/velocidade de uma Entrada — usada tanto pro
+     * arraste ao vivo (recém-desenhada ou sendo reajustada) quanto pra marcar permanentemente
+     * cada grupo já criado. `vx`/`vy` estão em unidades de velocidade da simulação.
      */
-    drawDirectionHandle(originX, originY, vx, vy, ydim, pxPerSquare) {
+    drawDirectionHandle(originX, originY, vx, vy, ydim, pxPerSquare, highlight = false) {
         const cX = (originX + 0.5) * pxPerSquare;
         const cY = (ydim - (originY + 0.5)) * pxPerSquare;
         const VELOCITY_TO_PIXELS = 300;
@@ -417,18 +847,34 @@ export class Renderer {
         const endY = cY - vy * VELOCITY_TO_PIXELS;
 
         this.context.save();
-        this.context.strokeStyle = '#38bdf8';
-        this.context.fillStyle = '#38bdf8';
-        this.context.lineWidth = 2;
+        // Uma cor sólida só, ponta a ponta (corpo + cabeça + ponto de origem) — laranja/âmbar,
+        // não a cor cyan da própria Entrada: a seta fica em cima da célula/linha de Entrada, que
+        // já é desenhada nesse mesmo tom de azul, então com a mesma cor ela literalmente
+        // desaparecia sempre que apontasse perto do próprio ângulo da forma (ver bugs.md, "não
+        // consigo acesso à seta de ajuste").
+        const arrowColor = '#f59e0b';
+        this.context.strokeStyle = arrowColor;
+        this.context.fillStyle = arrowColor;
+        this.context.lineWidth = 3;
 
-        this.context.beginPath();
-        this.context.arc(cX, cY, 4, 0, 2 * Math.PI);
-        this.context.fill();
+        if (highlight) {
+            this.context.beginPath();
+            this.context.arc(cX, cY, 7, 0, 2 * Math.PI);
+            this.context.strokeStyle = 'rgba(255, 180, 84, 1)';
+            this.context.lineWidth = 2;
+            this.context.stroke();
+            this.context.strokeStyle = arrowColor;
+            this.context.lineWidth = 3;
+        }
 
         this.context.beginPath();
         this.context.moveTo(cX, cY);
         this.context.lineTo(endX, endY);
         this.context.stroke();
+
+        this.context.beginPath();
+        this.context.arc(cX, cY, 4, 0, 2 * Math.PI);
+        this.context.fill();
 
         const angle = Math.atan2(endY - cY, endX - cX);
         const headLength = 8;
@@ -438,7 +884,30 @@ export class Renderer {
         this.context.lineTo(endX - headLength * Math.cos(angle + Math.PI / 6), endY - headLength * Math.sin(angle + Math.PI / 6));
         this.context.closePath();
         this.context.fill();
+        this.context.stroke();
+
+        // Alça na ponta — sinaliza visualmente que dá pra pegar e arrastar a ponta pra
+        // redirecionar o fluxo, não só a origem (ver bugs.md, "selecionar e arrastar a seta").
+        this.context.beginPath();
+        this.context.arc(endX, endY, 3.5, 0, 2 * Math.PI);
+        this.context.strokeStyle = '#ffffff';
+        this.context.lineWidth = 1.5;
+        this.context.stroke();
         this.context.restore();
+    }
+
+    /**
+     * @description Marca a seta de cada grupo de Entrada já criado — permanente, igual ao
+     * pontinho do pivô do Rotor. O grupo em `editingIndex` (se houver) é pulado aqui, pois o
+     * arraste ao vivo (`directionHandle`) já desenha a versão atualizada dele por cima.
+     */
+    drawSourceGroupHandles(solver, pxPerSquare, ydim, editingIndex = -1) {
+        if (!solver.sourceGroups || solver.sourceGroups.length === 0) return;
+        for (let i = 0; i < solver.sourceGroups.length; i++) {
+            if (i === editingIndex) continue;
+            const group = solver.sourceGroups[i];
+            this.drawDirectionHandle(group.originX, group.originY, group.vx, group.vy, ydim, pxPerSquare);
+        }
     }
 
     drawSensor(solver, pxPerSquare) {
@@ -489,7 +958,7 @@ export class Renderer {
     }
 
     _drawPreviewShape(activeTool, start, end, ydim, pxPerSquare) {
-        let strokeColor = 'rgba(255, 255, 255, 0.7)';
+        let strokeColor = 'rgba(28, 37, 48, 0.7)';
         if (activeTool === 'eraser') {
             strokeColor = 'rgba(255, 150, 150, 0.7)';
         } else if (activeTool === 'select') {
@@ -500,10 +969,56 @@ export class Renderer {
         this.context.setLineDash([5, 3]);
         if (activeTool === 'line') {
             this._previewLine(start, end, ydim, pxPerSquare);
-        } else if (activeTool.startsWith('rectangle') || activeTool.startsWith('ellipse') || activeTool === 'rounded_rectangle' || activeTool === 'eraser' || activeTool === 'select') {
+        } else if (activeTool.startsWith('ellipse')) {
+            // Preview real da elipse (oval) em vez do bounding box quadrado (bugs.md #48).
+            this._previewEllipse(start, end, ydim, pxPerSquare);
+        } else if (activeTool === 'rounded_rectangle') {
+            // Preview com cantos arredondados, igual à forma que será desenhada.
+            this._previewRoundedRectangle(start, end, ydim, pxPerSquare);
+        } else if (activeTool.startsWith('rectangle') || activeTool === 'eraser' || activeTool === 'select') {
             this._previewRectangle(start, end, ydim, pxPerSquare);
         }
         this.context.setLineDash([]);
+        this._drawDimensionLabel(activeTool, start, end, ydim, pxPerSquare);
+    }
+
+    /**
+     * @private
+     * @description Leitura ao vivo das dimensões da forma sendo arrastada (comprimento/ângulo
+     * pra linha; largura×altura pras demais) — só informativo, não altera o fluxo de desenho.
+     */
+    _drawDimensionLabel(activeTool, start, end, ydim, pxPerSquare) {
+        let text;
+        if (activeTool === 'line') {
+            const dx = end.x - start.x,
+                dy = end.y - start.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+            text = `${length.toFixed(1)} cél · ${angle.toFixed(0)}°`;
+        } else if (activeTool.startsWith('rectangle') || activeTool.startsWith('ellipse') || activeTool === 'rounded_rectangle') {
+            const w = Math.abs(end.x - start.x) + 1;
+            const h = Math.abs(end.y - start.y) + 1;
+            text = `${w} × ${h} cél`;
+        } else {
+            return;
+        }
+
+        const e = this._gridToCanvas(end.x, end.y, ydim, pxPerSquare);
+        this.context.font = "12px 'JetBrains Mono', Monospace";
+        const paddingX = 7;
+        const boxWidth = this.context.measureText(text).width + paddingX * 2;
+        const boxHeight = 20;
+        const bx = e.x + 14,
+            by = e.y - boxHeight - 6;
+        this.context.fillStyle = "rgba(16, 20, 27, 0.92)";
+        this.context.strokeStyle = "rgba(255, 180, 84, 0.8)";
+        this.context.lineWidth = 1;
+        this.context.fillRect(bx, by, boxWidth, boxHeight);
+        this.context.strokeRect(bx, by, boxWidth, boxHeight);
+        this.context.fillStyle = "#ffb454";
+        this.context.textAlign = 'left';
+        this.context.textBaseline = 'middle';
+        this.context.fillText(text, bx + paddingX, by + boxHeight / 2 + 1);
     }
 
     _previewLine(start, end, ydim, pxPerSquare) {
@@ -512,6 +1027,37 @@ export class Renderer {
         this.context.beginPath();
         this.context.moveTo(s.x, s.y);
         this.context.lineTo(e.x, e.y);
+        this.context.stroke();
+    }
+
+    _previewEllipse(start, end, ydim, pxPerSquare) {
+        const x0 = Math.min(start.x, end.x) * pxPerSquare;
+        const y0 = (ydim - 1 - Math.max(start.y, end.y)) * pxPerSquare;
+        const w = (Math.abs(end.x - start.x) + 1) * pxPerSquare;
+        const h = (Math.abs(end.y - start.y) + 1) * pxPerSquare;
+        this.context.beginPath();
+        this.context.ellipse(x0 + w / 2, y0 + h / 2, w / 2, h / 2, 0, 0, 2 * Math.PI);
+        this.context.stroke();
+    }
+
+    _previewRoundedRectangle(start, end, ydim, pxPerSquare) {
+        const x0 = Math.min(start.x, end.x) * pxPerSquare;
+        const y0 = (ydim - 1 - Math.max(start.y, end.y)) * pxPerSquare;
+        const w = (Math.abs(end.x - start.x) + 1) * pxPerSquare;
+        const h = (Math.abs(end.y - start.y) + 1) * pxPerSquare;
+        // Mesmo cálculo de raio que _drawRoundedRectangleOnGrid: 20% do menor lado.
+        const r = Math.max(1, Math.floor(Math.min(Math.abs(end.x - start.x), Math.abs(end.y - start.y)) * 0.2)) * pxPerSquare;
+        this.context.beginPath();
+        this.context.moveTo(x0 + r, y0);
+        this.context.lineTo(x0 + w - r, y0);
+        this.context.arcTo(x0 + w, y0, x0 + w, y0 + r, r);
+        this.context.lineTo(x0 + w, y0 + h - r);
+        this.context.arcTo(x0 + w, y0 + h, x0 + w - r, y0 + h, r);
+        this.context.lineTo(x0 + r, y0 + h);
+        this.context.arcTo(x0, y0 + h, x0, y0 + h - r, r);
+        this.context.lineTo(x0, y0 + r);
+        this.context.arcTo(x0, y0, x0 + r, y0, r);
+        this.context.closePath();
         this.context.stroke();
     }
 
