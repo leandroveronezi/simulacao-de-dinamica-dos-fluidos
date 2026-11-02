@@ -3,6 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/solver.test.mjs tests/objetos.test.mjs",
+    "test:ui": "node --test tests/ui.test.mjs",
+    "test:all": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
   }
 }
