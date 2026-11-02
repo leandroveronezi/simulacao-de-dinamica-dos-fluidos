@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/solver.test.mjs tests/objetos.test.mjs",
-    "test:ui": "node --test tests/ui.test.mjs",
+    "test:ui": "node --test tests/ui.test.mjs tests/persistencia.test.mjs",
     "test:all": "node --test tests/*.test.mjs"
   },
   "devDependencies": {

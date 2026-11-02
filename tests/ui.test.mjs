@@ -4,26 +4,13 @@
 //   UPDATE_SNAPSHOT=1 npm run test:ui
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { ROOT, serve } from './helpers.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SNAP = path.join(ROOT, 'tests/snapshots/ui-config.json');
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
-
-function serve() {
-    const server = http.createServer((req, res) => {
-        const file = path.join(ROOT, decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/$/, '/index.html'));
-        if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404).end(); return; }
-        res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream' });
-        fs.createReadStream(file).pipe(res);
-    });
-    return new Promise(r => server.listen(0, '127.0.0.1', () => r(server)));
-}
 
 test('roteiro de desenho: sem erros no console e estado igual ao instantâneo', async () => {
     const server = await serve();
