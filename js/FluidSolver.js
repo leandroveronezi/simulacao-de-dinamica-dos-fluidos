@@ -988,6 +988,14 @@ export class FluidSolver {
             ux[i] = cux;
             uy[i] = cuy;
 
+            // Células sólidas (Barreira/Rotor) NÃO colidem. O bounce-back de `stream()` deixa nelas
+            // as populações já refletidas; relaxá-las para o equilíbrio aqui as misturava com
+            // direções que apontam para FORA da parede, e esse excedente atravessava paredes de
+            // 1 célula: numa caixa fechada com a viscosidade padrão (0,02) a massa caía ~2,5% a
+            // cada 1000 passos e as próprias paredes ficavam com densidade anômala. `rho`/`ux`/
+            // `uy` acima continuam preenchidos, porque o Rotor lê a densidade da própria célula.
+            if (cellType[i] === FluidSolver.CELL_TYPE.BARRIER || cellType[i] === FluidSolver.CELL_TYPE.ROTOR) continue;
+
             // 2. Calcula as distribuições de equilíbrio (f_eq), a partir da densidade JÁ
             // grampeada — sem isso o equilíbrio calculado embaixo poderia continuar explodindo
             // mesmo com rho[i]/ux[i]/uy[i] (os valores expostos/lidos pelo resto do app) já
