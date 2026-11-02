@@ -1,25 +1,30 @@
 import { FluidSolver } from './FluidSolver.js?v=20260908d';
 import { Renderer } from './Renderer.js?v=20260908d';
 import { DEFAULT_LINE_WIDTH } from './PolygonGeometry.js?v=20260908d';
+import { applyMixin } from './app/applyMixin.js?v=20260908d';
 import { PointerInput } from './app/pointerInput.js?v=20260908d';
-import { Rasterization } from './app/rasterization.js?v=20260908d';
-import { ShapeProperties } from './app/shapeProperties.js?v=20260908d';
 import { ShapeDrag } from './app/shapeDrag.js?v=20260908d';
 import { HitTesting } from './app/hitTesting.js?v=20260908d';
+import { ShapeProperties } from './app/shapeProperties.js?v=20260908d';
+import { Rasterization } from './app/rasterization.js?v=20260908d';
 import { ControlPanel } from './app/controlPanel.js?v=20260908d';
-import { UiChrome } from './app/uiChrome.js?v=20260908d';
 import { GridSize } from './app/gridSize.js?v=20260908d';
+import { UiChrome } from './app/uiChrome.js?v=20260908d';
 import { Viewport } from './app/viewport.js?v=20260908d';
 import { History } from './app/history.js?v=20260908d';
 import { Selection } from './app/selection.js?v=20260908d';
 import { Persistence } from './app/persistence.js?v=20260908d';
-import { applyMixin } from './app/applyMixin.js?v=20260908d';
 import { HelpDialogs } from './app/helpDialogs.js?v=20260908d';
 
 /**
  * @class FluidSimulationApp
  * @description Controlador da aplicação: DOM, ferramentas de edição, undo/redo e
  * import/export de configuração. Orquestra um FluidSolver (física) e um Renderer (canvas).
+ *
+ * Este arquivo guarda o núcleo: construtor, consulta ao DOM, estado, ligação dos eventos, laço
+ * de simulação e pintura. O resto dos métodos mora em js/app/*.js, agrupado por assunto, e é
+ * anexado ao protótipo no fim deste arquivo (ver `applyMixin`); dentro deles `this` continua
+ * sendo a instância do app.
  */
 export class FluidSimulationApp {
     static PX_PER_SQUARE = 5;
@@ -958,28 +963,8 @@ export class FluidSimulationApp {
     }
 }
 
-applyMixin(FluidSimulationApp.prototype, HelpDialogs);
-
-applyMixin(FluidSimulationApp.prototype, Persistence);
-
-applyMixin(FluidSimulationApp.prototype, Selection);
-
-applyMixin(FluidSimulationApp.prototype, History);
-
-applyMixin(FluidSimulationApp.prototype, Viewport);
-
-applyMixin(FluidSimulationApp.prototype, GridSize);
-
-applyMixin(FluidSimulationApp.prototype, UiChrome);
-
-applyMixin(FluidSimulationApp.prototype, ControlPanel);
-
-applyMixin(FluidSimulationApp.prototype, HitTesting);
-
-applyMixin(FluidSimulationApp.prototype, ShapeDrag);
-
-applyMixin(FluidSimulationApp.prototype, ShapeProperties);
-
-applyMixin(FluidSimulationApp.prototype, Rasterization);
-
-applyMixin(FluidSimulationApp.prototype, PointerInput);
+// Métodos divididos por assunto (um arquivo cada em js/app/). A ordem não importa: o applyMixin
+// recusa dois métodos com o mesmo nome.
+for (const mixin of [PointerInput, ShapeDrag, HitTesting, ShapeProperties, Rasterization, ControlPanel, GridSize, UiChrome, Viewport, History, Selection, Persistence, HelpDialogs]) {
+    applyMixin(FluidSimulationApp.prototype, mixin);
+}
