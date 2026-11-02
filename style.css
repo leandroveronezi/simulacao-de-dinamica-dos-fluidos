@@ -816,14 +816,16 @@ canvas {
 
 /* ---------- Tamanho da grade (painel Simulação) ---------- */
 
-.grid-size-row {
+.grid-size-row,
+.line-width-row {
     display: flex;
     align-items: center;
     gap: 0.4rem;
     margin-bottom: 0.35rem;
 }
 
-.grid-size-row input[type="number"] {
+.grid-size-row input[type="number"],
+.line-width-row input[type="number"] {
     /* `min-width: 0` porque um <input> tem largura intrínseca própria: sem isso ele se recusa a
        encolher dentro do flex e o botão Aplicar é empurrado pra fora do painel. */
     flex: 1 1 0;
@@ -840,7 +842,8 @@ canvas {
     text-align: center;
 }
 
-.grid-size-row input[type="number"]:focus-visible {
+.grid-size-row input[type="number"]:focus-visible,
+.line-width-row input[type="number"]:focus-visible {
     outline: none;
     border-color: var(--accent);
 }

@@ -199,6 +199,8 @@ export class FluidSimulationApp {
         this.flipHorizontalButton = this.root.querySelector('#flipHorizontalButton');
         this.flipVerticalButton = this.root.querySelector('#flipVerticalButton');
         this.deleteSelectionButton = this.root.querySelector('#deleteSelectionButton');
+        this.defaultLineWidthInput = this.root.querySelector('#defaultLineWidthInput');
+        this.applyLineWidthToAllButton = this.root.querySelector('#applyLineWidthToAllButton');
         this.clearSelectionButton = this.root.querySelector('#clearSelectionButton');
         this.rotate90Button = this.root.querySelector('#rotate90Button');
         this.rotate180Button = this.root.querySelector('#rotate180Button');
@@ -234,6 +236,9 @@ export class FluidSimulationApp {
         this.toolStartPoint = null;
         this.selectionArea = null;
         this.clipboard = null;
+        // Espessura das PRÓXIMAS linhas (campo "Espessura das Linhas" da barra lateral). Fica só
+        // na sessão: cada linha guarda a própria `lineWidth` quando difere do padrão.
+        this.defaultLineWidth = FluidSimulationApp.DEFAULT_LINE_WIDTH;
         this.pastePreviewOrigin = null;
         this.undoStack = [];
         this.redoStack = [];
@@ -366,6 +371,8 @@ export class FluidSimulationApp {
         this.rotate90Button.addEventListener('click', () => this._rotateSelection(90));
         this.rotate180Button.addEventListener('click', () => this._rotateSelection(180));
         this.rotate270Button.addEventListener('click', () => this._rotateSelection(270));
+        this.defaultLineWidthInput.addEventListener('change', () => this._applyDefaultLineWidth());
+        this.applyLineWidthToAllButton.addEventListener('click', () => this._applyLineWidthToAll());
         this.zoomOutButton.addEventListener('click', () => this._zoomBy(1 / FluidSimulationApp.ZOOM_STEP));
         this.zoomInButton.addEventListener('click', () => this._zoomBy(FluidSimulationApp.ZOOM_STEP));
         this.resetZoomButton.addEventListener('click', () => this._resetView());

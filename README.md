@@ -44,7 +44,8 @@ comportamento for intencional: `UPDATE_SNAPSHOT=1 npm run test:ui`.
 
 - **Desenho:** Pincel, Linha, Retângulo, Elipse (cheios ou só contorno), Retângulo arredondado.
   Linhas, retângulos e elipses viram **formas vetoriais**: dá para selecioná-las, movê-las,
-  esticá-las, mudar a espessura e apagá-las depois.
+  esticá-las, mudar a espessura e apagá-las depois. O painel **Espessura das Linhas** define a
+  espessura das próximas linhas e tem um botão para aplicá-la a todas as já desenhadas.
 - **Preencher:** preenche uma área fechada e funde contorno e preenchimento numa forma só.
   Em área aberta, vira pintura livre.
 - **Borracha** (retangular ou em traço livre): corta de verdade as formas vetoriais, apagando só

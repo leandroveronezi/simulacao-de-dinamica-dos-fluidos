@@ -476,6 +476,9 @@ export class PointerInput {
             x1: end.x,
             y1: end.y
         };
+        if (tool === 'line' && this.defaultLineWidth !== FluidSimulationApp.DEFAULT_LINE_WIDTH) {
+            shape.lineWidth = this.defaultLineWidth;
+        }
         const cells = [];
         this._replayShapeGeometry(shape, (x, y) => {
             if (x >= 0 && x < this.solver.xdim && y >= 0 && y < this.solver.ydim) cells.push({ x, y });

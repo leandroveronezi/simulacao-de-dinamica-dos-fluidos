@@ -185,6 +185,37 @@ export class ShapeProperties {
      * @description Ajusta a espessura do contorno suave de uma linha (puramente cosmético, ver
      * Renderer.drawSmoothLineShapes) — não mexe em geometria/física, só reflete na tela.
      */
+    /**
+     * @private
+     * @description Lê o campo "Para as próximas linhas": valida (1 a 4), devolve o valor limpo ao
+     * campo e passa a usá-lo nas linhas desenhadas daqui em diante. Não altera as já existentes.
+     */
+    _applyDefaultLineWidth() {
+        const raw = Number(this.defaultLineWidthInput.value);
+        this.defaultLineWidth = Number.isFinite(raw) ? Math.max(1, Math.min(4, raw)) : FluidSimulationApp.DEFAULT_LINE_WIDTH;
+        this.defaultLineWidthInput.value = this.defaultLineWidth;
+    }
+
+    /**
+     * @private
+     * @description Aplica a espessura do campo a TODAS as linhas já desenhadas, num único passo
+     * desfazível. Avisa em vez de falhar em silêncio quando não há nenhuma linha.
+     */
+    _applyLineWidthToAll() {
+        this._applyDefaultLineWidth();
+        const linhas = this.shapes.filter(s => s.tool === 'line');
+        if (linhas.length === 0) {
+            Swal.fire({ title: 'Nenhuma linha', text: 'Não há linhas desenhadas para ajustar.', icon: 'info' });
+            return;
+        }
+        this._saveState();
+        for (const s of linhas) s.lineWidth = this.defaultLineWidth;
+        this._rasterizeShapes();
+        this._updateFloatingPanel();
+        this._markDirty();
+        this._requestPaint();
+    }
+
     _applyLineWidth() {
         if (this.selectedShapeIndex < 0) return;
         const shape = this.shapes[this.selectedShapeIndex];
