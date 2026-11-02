@@ -143,6 +143,10 @@ export class FluidSolver {
     // esse mesmo caso converge (ρ ≈ 0,71 estável por 20 mil passos) e o caso normal — canal com
     // borda de entrada repondo massa — nem chega perto do piso, então o dreno segue em cheio.
     static SINK_RHO_FLOOR = 0.6;
+    // Velocidades (em células/passo) entre as quais a sucção de uma Saída cai de 100% a 0%:
+    // acima delas o escoamento sai da faixa em que o método é válido. Ver `_applySourcesAndSinks`.
+    static SINK_SOFT_SPEED = 0.08;
+    static SINK_HARD_SPEED = 0.16;
 
     // --- Partículas físicas (bolinhas/caixas/folhas), bugs.md #32 ---
     // Objetos avulsos, carimbados um por clique (`addParticle`, ver FluidSimulationApp) — sem
@@ -944,7 +948,18 @@ export class FluidSolver {
                 // Rampa do piso: em ρ ≥ 1 drena a taxa cheia, em ρ ≤ floor não drena nada.
                 const ramp = (rhoNow - floor) / (1 - floor);
                 if (ramp <= 0) continue;
-                const keep = 1 - alpha * (ramp < 1 ? ramp : 1);
+                // Vazão limitada: o ralo esvazia a região e o gradiente de pressão acelera o fluido
+                // para dentro. Passada a velocidade de validade do método (~0,1 a 0,15) o escoamento
+                // instabiliza: medido, uma Saída de 60x40 com a sucção padrão entrava em
+                // instabilidade em ~5700 passos e uma de 100x50 em ~400. Então a sucção cai
+                // linearmente de SINK_SOFT_SPEED até zero em SINK_HARD_SPEED, e o ralo se
+                // autolimita em vez de bombear sem fim.
+                const sux = (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]) / rhoNow;
+                const suy = (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]) / rhoNow;
+                const spd = Math.hypot(sux, suy);
+                const speedRamp = spd <= FluidSolver.SINK_SOFT_SPEED ? 1 : spd >= FluidSolver.SINK_HARD_SPEED ? 0 : (FluidSolver.SINK_HARD_SPEED - spd) / (FluidSolver.SINK_HARD_SPEED - FluidSolver.SINK_SOFT_SPEED);
+                if (speedRamp <= 0) continue;
+                const keep = 1 - alpha * (ramp < 1 ? ramp : 1) * speedRamp;
                 this.n0[i] *= keep;
                 this.nN[i] *= keep;
                 this.nS[i] *= keep;

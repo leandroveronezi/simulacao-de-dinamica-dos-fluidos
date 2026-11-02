@@ -292,3 +292,19 @@ test('o ponto ejetado leva a velocidade da superfície da pá', () => {
     assert.ok(Math.abs((r.x - livre.x) - (-0.4)) < 1e-4, `dx = ${r.x - livre.x}, esperado -0,4 (velocidade da pá)`);
     assert.ok(Math.abs(r.y - livre.y) < 1e-4, `dy = ${r.y - livre.y}`);
 });
+
+test('Saída grande (60x40, sucção padrão) não instabiliza o escoamento em 6500 passos', () => {
+    // Antes do limite de vazão da sucção, esta cena entrava em instabilidade em ~5700 passos:
+    // o ralo esvaziava a região e o gradiente de pressão acelerava o fluido acima do limite de
+    // validade do método (|u| ~ 0,3).
+    const s = new FluidSolver(211, 147); s.boundaryMode = 'open'; s.initFluid(0);
+    for (let y = 60; y < 100; y++) for (let x = 80; x < 140; x++) s.setCell(x, y, CT.SINK);
+    const aviso = console.warn; console.warn = () => {};
+    try {
+        for (let i = 0; i < 6500; i++) {
+            s.step({ u0: 0, viscosity: VISC, moveTracers: false });
+            if (i % 250 === 0) assert.ok(s.checkStability(), `instável no passo ${i} (limitador em ${s._clampedCellCount} células)`);
+        }
+        assert.ok(s.checkStability(), 'instável ao final');
+    } finally { console.warn = aviso; }
+});

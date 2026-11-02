@@ -3,7 +3,6 @@
 // anexados ao protótipo do app por applyMixin, então `this` é a instância do app.
 
 import { FluidSolver } from '../FluidSolver.js?v=20260908d';
-import { Renderer } from '../Renderer.js?v=20260908d';
 import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20260908d';
 import { shapeToPolygonRings, clipperBoolean, clipperInflate, rasterizePolygonToCells, traceCellsToRings } from '../PolygonGeometry.js?v=20260908d';
 

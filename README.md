@@ -125,7 +125,9 @@ vizinhas. Densidade e velocidade surgem dos momentos das distribuições.
   manter a ponta da pá dentro da faixa estável do solver.
 - **Saída** multiplica as 9 distribuições por `1 − α`: a densidade cai e a velocidade fica
   igual, então o ralo não vira obstáculo. Um piso de densidade (`SINK_RHO_FLOOR = 0,6`) evita
-  esvaziar recintos selados.
+  esvaziar recintos selados. A sucção também cai quando a velocidade de entrada passa de 0,08
+  e se anula em 0,16, que é onde o método deixa de ser válido: uma Saída muito grande se
+  autolimita em vez de instabilizar o escoamento (se mesmo assim ficar instável, o app avisa).
 - **Grade** multiplica a velocidade por `0,85` em cada célula, então uma faixa mais grossa
   resiste mais.
 - **Partículas** têm raio, arrasto e gravidade interpolados de um único peso (0 a 1). O arrasto
