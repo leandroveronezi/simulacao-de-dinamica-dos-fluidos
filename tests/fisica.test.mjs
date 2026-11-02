@@ -74,6 +74,21 @@ test('espelhamento: obstáculo simétrico com vento simétrico dá campo simétr
     assert.ok(a < 1e-5, `assimetria = ${a}`);
 });
 
+
+// "Parou" = o ângulo não anda. A velocidade angular tem um jitter de ~1e-4 rad/passo (ruído
+// acústico do fluido, ora positivo ora negativo) que não gira nada; por isso o critério é a
+// variação do ângulo numa janela, não o valor instantâneo de omega.
+// Com amortecimento 0 sobra uma rotação residual de ~2e-5 rad/passo: é o fluido que o próprio
+// rotor pôs em giro e que o arrasta; só a viscosidade o dissipa (escala de dezenas de milhares de
+// passos). Por isso a tolerância é de 0,1 rad por 2000 passos (5e-5 rad/passo, uma volta em ~35 min a
+// 200 passos/s), muito abaixo de qualquer giro visível.
+function assentou(s, passos = 2000, tolAngulo = 0.1) {
+    const b = s.rotatingBodies[0], a0 = b.angle;
+    step(s, passos);
+    assert.ok(Math.abs(b.angle - a0) < tolAngulo, `ainda girando: o ângulo andou ${b.angle - a0} rad em ${passos} passos`);
+    assert.ok(Math.abs(b.omega) < 1e-3, `omega = ${b.omega}`);
+}
+
 function rotorLivre(sentidoVento) {
     const s = new FluidSolver(80, 40); s.boundaryMode = 'open'; s.initFluid(0);
     const xsrc = sentidoVento > 0 ? 5 : 75, src = [];
@@ -99,8 +114,8 @@ test('rotor lançado em fluido parado desacelera até praticamente parar', () =>
         const cells = []; for (let y = 13; y <= 27; y++) cells.push({ x: 40, y });
         s.addRotatingBody(cells, null, { damping }); s.stampRotatingBodiesOntoGrid();
         const b = s.rotatingBodies[0]; b.omega = 0.03;
-        step(s, 6000);
-        assert.ok(Math.abs(b.omega) < 1e-4, `damping=${damping}: omega = ${b.omega}`);
+        step(s, 5000);
+        assentou(s);
     }
 });
 
@@ -108,8 +123,8 @@ test('rotor para depois que o vento é cortado', () => {
     const s = rotorLivre(+1);
     step(s, 2500);
     for (const g of s.sourceGroups) s.updateSourceGroupVelocity(s.sourceGroups.indexOf(g), 0, 0);
-    step(s, 8000);
-    assert.ok(Math.abs(s.rotatingBodies[0].omega) < 1e-4, `omega = ${s.rotatingBodies[0].omega}`);
+    step(s, 6000);
+    assentou(s);
 });
 
 test('motor desligado: o rotor perde a velocidade por inércia', () => {
@@ -133,4 +148,64 @@ test('continuidade: num canal com estreitamento o fluxo de massa se mantém e a 
     // Metade da seção livre => velocidade média ~2x (tolerância larga: o LBM é levemente compressível).
     const razao = (fluxo(80) / 20) / (fluxo(40) / 40);
     assert.ok(razao > 1.8 && razao < 2.2, `razão de velocidades = ${razao}`);
+});
+
+// Força do fluido sobre a barreira (seta "Força"): num canal com vento uniforme o arrasto médio
+// sobre um obstáculo aponta A FAVOR do vento (antes do conserto o sinal estava trocado).
+test('o arrasto médio sobre um cilindro no canal aponta a favor do vento, com sustentação ~0', () => {
+    const W = 200, H = 80, D = 16, U = 0.08, s = new FluidSolver(W, H); s.initFluid(U);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if ((x - 60) ** 2 + (y - 40) ** 2 <= (D / 2) ** 2) s.setCell(x, y, CT.BARRIER);
+    step(s, 4000, U, U * D / 100);
+    let fx = 0, fy = 0; const N = 2000;
+    for (let i = 0; i < N; i++) { step(s, 1, U, U * D / 100); fx += s.barrierFx; fy += s.barrierFy; }
+    fx /= N; fy /= N;
+    const cd = 2 * fx / (U * U * D);
+    assert.ok(fx > 0, `Fx médio = ${fx} (deve ser positivo: a favor do vento)`);
+    assert.ok(cd > 0.8 && cd < 2.5, `Cd = ${cd} (esperado ~1,3 a 1,6 a Re=100 com bloqueio)`);
+    assert.ok(Math.abs(fy) < 0.15 * fx, `sustentação média Fy = ${fy} vs arrasto ${fx}`);
+});
+
+test('cilindro a Re=100 desprende vórtices com Strouhal na faixa da literatura (0,15 a 0,22)', () => {
+    const W = 260, H = 80, D = 16, U = 0.08, visc = U * D / 100, cx = 60, cy = 40;
+    const s = new FluidSolver(W, H); s.initFluid(U);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if ((x - cx) ** 2 + (y - cy) ** 2 <= (D / 2) ** 2) s.setCell(x, y, CT.BARRIER);
+    const sonda = [];
+    for (let i = 0; i < 20000; i++) { s.step({ u0: U, viscosity: visc, moveTracers: false }); if (i > 8000 && i % 5 === 0) sonda.push(s.uy[(cx + 4 * D) + cy * W]); }
+    const m = sonda.reduce((a, b) => a + b, 0) / sonda.length; let cruz = 0;
+    for (let i = 1; i < sonda.length; i++) if ((sonda[i - 1] - m) * (sonda[i] - m) < 0) cruz++;
+    const St = (cruz / 2 / (sonda.length * 5)) * D / U;
+    assert.ok(cruz / 2 >= 5, `poucos ciclos de desprendimento: ${cruz / 2}`);
+    assert.ok(St > 0.15 && St < 0.22, `St = ${St}`);
+});
+
+// Um motor girando numa caixa selada não pode criar nem destruir ar (nem desestabilizar o resto).
+function caixaComMotor() {
+    const W = 80, H = 60, x0 = 3, x1 = 76, y0 = 3, y1 = 56;
+    const s = new FluidSolver(W, H); s.boundaryMode = 'open'; s.initFluid(0);
+    for (let x = x0; x <= x1; x++) { s.setCell(x, y0, CT.BARRIER); s.setCell(x, y1, CT.BARRIER); }
+    for (let y = y0; y <= y1; y++) { s.setCell(x0, y, CT.BARRIER); s.setCell(x1, y, CT.BARRIER); }
+    const cells = []; for (let y = 20; y <= 40; y++) cells.push({ x: 40, y });
+    s.addRotatingBody(cells, null, { motorDirection: 1, motorSpeed: 1, damping: 0.02 }); s.stampRotatingBodiesOntoGrid();
+    const dentro = i => { const x = i % W, y = (i / W) | 0; return x >= x0 && x <= x1 && y >= y0 && y <= y1; };
+    const massa = (fn) => { let m = 0; for (let i = 0; i < W * H; i++) if (fn(i)) m += soma(s, i); return m; };
+    return { s, interno: () => massa(dentro), externo: () => massa(i => !dentro(i)) };
+}
+
+test('motor ligado numa caixa selada conserva a massa (interior + paredes + rotor)', () => {
+    const c = caixaComMotor(); step(c.s, 300);
+    const m0 = c.interno();
+    step(c.s, 6000);
+    assert.ok(Math.abs(c.interno() / m0 - 1) < 1e-3, `massa/inicial = ${c.interno() / m0}`);
+    assert.ok(Math.abs(c.s.rotatingBodies[0].omega) > 1e-3, 'o motor tem que estar girando para o teste valer');
+    assert.ok(c.s.checkStability());
+});
+
+test('a correção de massa do rotor não perturba a região em repouso fora da caixa', () => {
+    const c = caixaComMotor(); step(c.s, 300);
+    const e0 = c.externo();
+    step(c.s, 4000);
+    assert.ok(Math.abs(c.externo() / e0 - 1) < 1e-4, `massa externa/inicial = ${c.externo() / e0}`);
+    let mn = 9, mx = 0; const W = 80;
+    for (let i = 0; i < W * 60; i++) { const x = i % W, y = (i / W) | 0; if (!(x >= 3 && x <= 76 && y >= 3 && y <= 56)) { const r = soma(c.s, i); mn = Math.min(mn, r); mx = Math.max(mx, r); } }
+    assert.ok(mn > 0.99 && mx < 1.01, `densidade externa fugiu de 1: ${mn}..${mx}`);
 });

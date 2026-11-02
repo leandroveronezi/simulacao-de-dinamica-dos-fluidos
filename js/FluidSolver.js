@@ -520,10 +520,20 @@ export class FluidSolver {
             sumUy += this.uy[ni];
             count++;
         }
+        // A densidade da célula devolvida ao fluido é a massa que ELA MESMA guardava enquanto era
+        // sólida (o bounce-back mantém essa massa nas populações da célula), e não a média dos
+        // vizinhos: a média inventava massa nova a cada célula varrida pela pá, e o descarte das
+        // populações antigas a destruía. Medido numa caixa fechada com o motor ligado, a
+        // densidade média subia ~0,35% por 1000 passos. Só cai na média dos vizinhos se a massa
+        // guardada não for um valor sensato.
+        const i = x + y * xdim;
+        const stored = this.n0[i] + this.nN[i] + this.nS[i] + this.nE[i] + this.nW[i] +
+            this.nNE[i] + this.nSE[i] + this.nNW[i] + this.nSW[i];
+        const storedOk = isFinite(stored) && stored >= FluidSolver.MIN_SAFE_RHO && stored <= FluidSolver.MAX_SAFE_RHO;
         if (count > 0) {
-            this.setEquilibrium(x, y, sumUx / count, sumUy / count, sumRho / count);
+            this.setEquilibrium(x, y, sumUx / count, sumUy / count, storedOk ? stored : sumRho / count);
         } else {
-            this.setEquilibrium(x, y, 0, 0, 1);
+            this.setEquilibrium(x, y, 0, 0, storedOk ? stored : 1);
         }
     }
 
@@ -1098,6 +1108,9 @@ export class FluidSolver {
         // (2·rho·r²) não depende de omega, ele é acumulado aqui e aplicado de forma implícita em
         // `_updateRotatingBodies()`, o que mantém o esquema estável para qualquer massa.
         const dragAccum = new Float64Array(this.rotatingBodies.length);
+        // Massa líquida criada, por corpo, pela correção de parede em movimento neste passo (ver
+        // `_removeInjectedMass`).
+        const massInjected = new Float64Array(this.rotatingBodies.length);
 
         for (let i = 0; i < this.xdim * this.ydim; i++) {
             const type = this.cellType[i];
@@ -1119,8 +1132,12 @@ export class FluidSolver {
                     this.barrierCount++;
                     this.barrierxSum += x;
                     this.barrierySum += y;
-                    this.barrierFx += 2 * (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]);
-                    this.barrierFy += 2 * (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]);
+                    // Força do fluido SOBRE a barreira (a seta "Força"). As populações aqui já foram
+                    // refletidas, então o momento que chegou à parede é o OPOSTO do somatório
+                    // abaixo — daí o sinal negativo, o mesmo usado para o torque do Rotor. Com o
+                    // sinal positivo a seta de arrasto apontava CONTRA o vento.
+                    this.barrierFx -= 2 * (this.nE[i] + this.nNE[i] + this.nSE[i] - this.nW[i] - this.nNW[i] - this.nSW[i]);
+                    this.barrierFy -= 2 * (this.nN[i] + this.nNE[i] + this.nNW[i] - this.nS[i] - this.nSE[i] - this.nSW[i]);
                 } else {
                     // ROTOR: mede o torque a partir das distribuições recém-refletidas, ANTES de
                     // injetar a correção de parede em movimento logo abaixo. A troca de momento
@@ -1174,45 +1191,53 @@ export class FluidSolver {
                         if (this._isOpenCell(row + xR)) {
                             drag += W9 * dy * dy;
                             this.nE[i] += W9 * wallVx;
+                            massInjected[bodyIndex] += W9 * wallVx;
                         }
                         // e = (-1, 0): k = +dy
                         if (this._isOpenCell(row + xL)) {
                             drag += W9 * dy * dy;
                             this.nW[i] -= W9 * wallVx;
+                            massInjected[bodyIndex] -= W9 * wallVx;
                         }
                         // e = (0, +1): k = +dx
                         if (this._isOpenCell(rowUp + x)) {
                             drag += W9 * dx * dx;
                             this.nN[i] += W9 * wallVy;
+                            massInjected[bodyIndex] += W9 * wallVy;
                         }
                         // e = (0, -1): k = -dx
                         if (this._isOpenCell(rowDn + x)) {
                             drag += W9 * dx * dx;
                             this.nS[i] -= W9 * wallVy;
+                            massInjected[bodyIndex] -= W9 * wallVy;
                         }
                         // e = (+1, +1): k = dx - dy
                         if (this._isOpenCell(rowUp + xR)) {
                             const k = dx - dy;
                             drag += W36 * k * k;
                             this.nNE[i] += W36 * (wallVx + wallVy);
+                            massInjected[bodyIndex] += W36 * (wallVx + wallVy);
                         }
                         // e = (-1, -1): k = dy - dx
                         if (this._isOpenCell(rowDn + xL)) {
                             const k = dx - dy;
                             drag += W36 * k * k;
                             this.nSW[i] -= W36 * (wallVx + wallVy);
+                            massInjected[bodyIndex] -= W36 * (wallVx + wallVy);
                         }
                         // e = (-1, +1): k = dx + dy
                         if (this._isOpenCell(rowUp + xL)) {
                             const k = dx + dy;
                             drag += W36 * k * k;
                             this.nNW[i] += W36 * (-wallVx + wallVy);
+                            massInjected[bodyIndex] += W36 * (-wallVx + wallVy);
                         }
                         // e = (+1, -1): k = -(dx + dy)
                         if (this._isOpenCell(rowDn + xR)) {
                             const k = dx + dy;
                             drag += W36 * k * k;
                             this.nSE[i] -= W36 * (-wallVx + wallVy);
+                            massInjected[bodyIndex] -= W36 * (-wallVx + wallVy);
                         }
                         dragAccum[bodyIndex] += drag;
                     }
@@ -1221,6 +1246,48 @@ export class FluidSolver {
         }
         this._rotorTorqueAccum = torqueAccum;
         this._rotorDragAccum = dragAccum;
+        for (let b = 0; b < massInjected.length; b++) {
+            if (massInjected[b] !== 0) this._removeInjectedMass(b, massInjected[b]);
+        }
+    }
+
+    /**
+     * @private
+     * @description A correção de parede em movimento soma `+w` numa direção e `-w` na oposta, mas
+     * só nas direções que apontam para células abertas; onde só um lado está aberto sobra massa
+     * líquida (medido numa caixa fechada com o motor ligado: ~+1,3% de massa por 1000 passos).
+     * Em vez de mexer no sopro do rotor, já calibrado, devolve-se aqui exatamente a massa criada,
+     * repartida entre as células de fluido PERTO do próprio corpo (raio da pá + 3), onde ela
+     * nasceu. Repartir pelo domínio inteiro não serve: perturbava a região em repouso longe do
+     * rotor, e o anel entre uma caixa e a borda aberta entrava em instabilidade numérica.
+     * Entrada e saída de massa pelas bordas e pelas Saídas ficam intactas.
+     */
+    _removeInjectedMass(bodyIndex, mass) {
+        const body = this.rotatingBodies[bodyIndex];
+        if (!body) return;
+        const xdim = this.xdim, ydim = this.ydim, cellType = this.cellType, n0 = this.n0;
+        const NORMAL = FluidSolver.CELL_TYPE.NORMAL;
+        const reach = Math.ceil(body.maxRadius) + 3;
+        const xa = Math.max(0, Math.floor(body.pivotX - reach)), xb = Math.min(xdim - 1, Math.ceil(body.pivotX + reach));
+        const ya = Math.max(0, Math.floor(body.pivotY - reach)), yb = Math.min(ydim - 1, Math.ceil(body.pivotY + reach));
+        const r2 = reach * reach;
+        let count = 0;
+        for (let y = ya; y <= yb; y++) {
+            for (let x = xa; x <= xb; x++) {
+                if (cellType[x + y * xdim] !== NORMAL) continue;
+                const dx = x - body.pivotX, dy = y - body.pivotY;
+                if (dx * dx + dy * dy <= r2) count++;
+            }
+        }
+        if (count === 0) return;
+        const per = mass / count;
+        for (let y = ya; y <= yb; y++) {
+            for (let x = xa; x <= xb; x++) {
+                if (cellType[x + y * xdim] !== NORMAL) continue;
+                const dx = x - body.pivotX, dy = y - body.pivotY;
+                if (dx * dx + dy * dy <= r2) n0[x + y * xdim] -= per;
+            }
+        }
     }
 
     computeCurl() {
