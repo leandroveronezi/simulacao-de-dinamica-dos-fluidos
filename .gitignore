@@ -1,0 +1,15 @@
+# Configurações locais do Claude Code
+.claude/settings.local.json
+
+# Cenário exportado pelo app (grande, local)
+fluid-sim-config.json
+
+# Dependências e saídas de teste
+node_modules/
+test-results/
+playwright-report/
+
+# Sistema / editor
+.DS_Store
+*.swp
+*.bmp
