@@ -20,8 +20,8 @@ a fonte vêm de CDN.
 
 ```bash
 npm install            # só na primeira vez (instala o playwright-core)
-npm test               # solver e objetos, em Node puro, sem navegador
-npm run test:ui        # roteiro de desenho em um Chrome real
+npm test               # solver e objetos, em Node puro, sem navegador (rápido)
+npm run test:ui        # interface em um Chrome real: desenho, edição, seleção, zoom, salvar
 npm run test:all       # tudo
 ```
 
@@ -123,17 +123,34 @@ vizinhas. Densidade e velocidade surgem dos momentos das distribuições.
 ```
 index.html, style.css, main.js    # página, estilos e ponto de entrada
 js/
-  FluidSolver.js        # física LBM, rotores, partículas, traçadores (sem DOM)
-  Renderer.js           # desenho no Canvas 2D (ImageData offscreen)
-  FluidSimulationApp.js # controlador: DOM, ferramentas, undo/redo, zoom, import/export
-  PolygonGeometry.js    # polígonos das formas e operações booleanas (Clipper.js)
-tests/                  # testes do solver, dos objetos e da interface
-bugs.md                 # pendências em aberto
+  FluidSolver.js          # física LBM, rotores, partículas, traçadores (sem DOM)
+  Renderer.js             # desenho no Canvas 2D (ImageData offscreen)
+  PolygonGeometry.js      # polígonos das formas e operações booleanas (Clipper.js)
+  FluidSimulationApp.js   # núcleo do controlador: DOM, estado, eventos, laço de simulação
+  app/                    # o resto do controlador, um arquivo por assunto:
+    pointerInput.js         #   mouse: pressionar, mover, soltar, criar formas
+    shapeDrag.js            #   esticar/mover formas, direção da seta da Entrada
+    hitTesting.js           #   o que está sob o cursor
+    shapeProperties.js      #   painel flutuante de propriedades
+    rasterization.js        #   formas na grade, preenchimento, borracha e corte
+    controlPanel.js         #   faixa de controle de Entradas, Saídas e Válvulas
+    selection.js            #   seleção e área de transferência
+    history.js              #   desfazer e refazer
+    viewport.js             #   zoom, pan e conversão de coordenadas
+    gridSize.js             #   tamanho da grade
+    persistence.js          #   autosave, projetos e importar/exportar JSON
+    uiChrome.js             #   tooltip, menus e sliders
+    helpDialogs.js          #   diálogos de ajuda
+    applyMixin.js           #   anexa esses arquivos ao FluidSimulationApp
+tests/                    # solver, objetos e interface (Chrome real)
+bugs.md                   # pendências em aberto
 ```
 
-`FluidSolver` não toca no DOM e `Renderer` recebe tudo pronto por um `viewState`, o que permite
-testar a física no Node. O histórico de decisões e correções está no git; comentários no código
-que citam "bugs.md #N" apontam para o `bugs.md` do commit `7fd3bfe`.
+Os arquivos de `js/app/` são classes cujos métodos são anexados ao `FluidSimulationApp` por
+`applyMixin`; dentro deles `this` é a instância do app. `FluidSolver` não toca no DOM e `Renderer`
+recebe tudo pronto por um `viewState`, o que permite testar a física no Node. O histórico de
+decisões e correções está no git; comentários no código que citam "bugs.md #N" apontam para o
+`bugs.md` do commit `7fd3bfe`.
 
 ## Referências
 
