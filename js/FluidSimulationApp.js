@@ -3212,8 +3212,13 @@ export class FluidSimulationApp {
     }
     _cutSelection() {
         if (!this.selectionArea) return;
+        // `_copySelection` termina limpando `selectionArea`, e `_deleteSelection` precisa dela:
+        // sem restaurá-la o recorte só copiava e nunca apagava a origem. Salva o ponto de
+        // desfazer (true) porque a cópia não salva nenhum, e recortar tem que ser desfazível.
+        const area = this.selectionArea;
         this._copySelection();
-        this._deleteSelection(false);
+        this.selectionArea = area;
+        this._deleteSelection(true);
     }
     _pasteSelection(origin) {
         if (!this.clipboard) return;
