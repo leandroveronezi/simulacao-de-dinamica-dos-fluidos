@@ -1,6 +1,8 @@
 import { FluidSolver } from './FluidSolver.js?v=20260908d';
 import { Renderer } from './Renderer.js?v=20260908d';
 import { DEFAULT_LINE_WIDTH, shapeToPolygonRings, clipperBoolean, clipperInflate, rasterizePolygonToCells, traceCellsToRings } from './PolygonGeometry.js?v=20260908d';
+import { Viewport } from './app/viewport.js?v=20260908d';
+import { History } from './app/history.js?v=20260908d';
 import { Selection } from './app/selection.js?v=20260908d';
 import { Persistence } from './app/persistence.js?v=20260908d';
 import { applyMixin } from './app/applyMixin.js?v=20260908d';
@@ -685,59 +687,6 @@ export class FluidSimulationApp {
         this.canvas.width = this.canvasContainer.clientWidth;
         this.canvas.height = this.canvasContainer.clientHeight;
         this._resetView();
-        this._requestPaint();
-    }
-
-    /**
-     * @private
-     * @description Restaura zoom=1 e centraliza a grade na viewport. Com a grade maior que a
-     * janela (padrão desde o multiplicador de tamanho), ancorar em panX=panY=0 mostrava só o
-     * canto superior esquerdo — centralizar dá uma visão inicial mais útil.
-     */
-    _resetView() {
-        this.zoom = 1;
-        const viewportWidth = this.canvas.width - Renderer.RULER_SIZE;
-        const viewportHeight = this.canvas.height - Renderer.RULER_SIZE;
-        const gridContentWidth = this.solver.xdim * this.pxPerSquare;
-        const gridContentHeight = this.solver.ydim * this.pxPerSquare;
-        this.panX = (viewportWidth - gridContentWidth * this.zoom) / 2;
-        this.panY = (viewportHeight - gridContentHeight * this.zoom) / 2;
-        this._requestPaint();
-    }
-
-    /**
-     * @private
-     * @description Aplica zoom com a roda do mouse, mantendo o ponto sob o cursor fixo na tela.
-     */
-    _handleWheelZoom(e) {
-        e.preventDefault();
-        const rect = this.canvasContainer.getBoundingClientRect();
-        const factor = e.deltaY < 0 ? FluidSimulationApp.ZOOM_STEP : 1 / FluidSimulationApp.ZOOM_STEP;
-        this._zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top);
-    }
-
-    /**
-     * @private
-     * @description Aplica zoom pelos botões +/-, centrado no meio da área visível do canvas.
-     */
-    _zoomBy(factor) {
-        this._zoomAt(factor, this.canvasContainer.clientWidth / 2, this.canvasContainer.clientHeight / 2);
-    }
-
-    /**
-     * @private
-     * @description Muda o zoom por `factor`, mantendo o ponto (pivotX, pivotY) — relativo ao
-     * contêiner do canvas — fixo na tela.
-     */
-    _zoomAt(factor, pivotX, pivotY) {
-        const contentX = (pivotX - this.panX) / this.zoom;
-        const contentY = (pivotY - this.panY) / this.zoom;
-
-        const newZoom = Math.min(FluidSimulationApp.MAX_ZOOM, Math.max(FluidSimulationApp.MIN_ZOOM, this.zoom * factor));
-
-        this.panX = pivotX - contentX * newZoom;
-        this.panY = pivotY - contentY * newZoom;
-        this.zoom = newZoom;
         this._requestPaint();
     }
 
@@ -3277,55 +3226,6 @@ export class FluidSimulationApp {
         if (this.running) this.startStop();
         this._resetSimulation(w, h);
     }
-
-    pageToCanvas(pageX, pageY) {
-        const rect = this.canvas.getBoundingClientRect();
-        const scaleX = this.canvas.width / rect.width;
-        const scaleY = this.canvas.height / rect.height;
-        return {
-            x: (pageX - rect.left) * scaleX,
-            y: (pageY - rect.top) * scaleY
-        };
-    }
-    canvasToGrid(canvasX, canvasY) {
-        const contentX = (canvasX - Renderer.RULER_SIZE - this.panX) / this.zoom;
-        const contentY = (canvasY - Renderer.RULER_SIZE - this.panY) / this.zoom;
-        const gridX = Math.floor(contentX / this.pxPerSquare);
-        const gridY = this.solver.ydim - 1 - Math.floor(contentY / this.pxPerSquare);
-        return {
-            x: gridX,
-            y: gridY
-        };
-    }
-    /**
-     * @private
-     * @description Inverso de `canvasToGrid` — de uma coordenada de grade pra um ponto em
-     * pixels do canvas (espaço interno, considerando zoom/pan/régua).
-     */
-    gridToCanvas(gridX, gridY) {
-        const contentX = gridX * this.pxPerSquare;
-        const contentY = (this.solver.ydim - 1 - gridY) * this.pxPerSquare;
-        return {
-            x: contentX * this.zoom + this.panX + Renderer.RULER_SIZE,
-            y: contentY * this.zoom + this.panY + Renderer.RULER_SIZE
-        };
-    }
-    /**
-     * @private
-     * @description Como `gridToCanvas`, mas em pixels CSS (não pixels internos do canvas) —
-     * usado pra posicionar elementos HTML absolutos dentro de `#canvas-container` (que tem o
-     * mesmo tamanho em tela que o canvas).
-     */
-    _gridToPanelPosition(gridX, gridY) {
-        const canvasPt = this.gridToCanvas(gridX, gridY);
-        const rect = this.canvas.getBoundingClientRect();
-        const scaleX = this.canvas.width / rect.width;
-        const scaleY = this.canvas.height / rect.height;
-        return {
-            x: canvasPt.x / scaleX,
-            y: canvasPt.y / scaleY
-        };
-    }
     /**
      * @description Pinta uma célula na camada livre (rawCellType) — usada por Pincel,
      * Preenchimento, Borracha e pelas operações de seleção (colar/girar/inverter). Formas
@@ -3344,72 +3244,6 @@ export class FluidSimulationApp {
         }
         return true;
     }
-
-    /**
-     * @private
-     * @description Só uma fonte de verdade por vez: guarda `rawCellType` (pintura livre) +
-     * `shapes[]` (formas vetoriais), NÃO o `cellType` composto — as duas representações da
-     * mesma informação podem divergir silenciosamente se guardadas juntas. `solver.particles`
-     * (objetos avulsos de bugs.md #32) fica de fora de propósito: sem uma "fonte" que os defina,
-     * eles são estado vivo da simulação, não geometria de design — mesmo tratamento que
-     * `dyeTracers`/`tracerX/Y` já recebem (nunca entraram no undo, só as SUAS fontes entravam).
-     */
-    _snapshotState() {
-        return {
-            rawCellType: this.rawCellType.slice(),
-            shapes: JSON.parse(JSON.stringify(this.shapes)),
-            sourceVx: this.solver.sourceVx.slice(),
-            sourceVy: this.solver.sourceVy.slice(),
-            dyeSources: JSON.parse(JSON.stringify(this.solver.dyeSources)),
-            rotatingBodies: JSON.parse(JSON.stringify(this.solver.rotatingBodies)),
-            sourceGroups: JSON.parse(JSON.stringify(this.solver.sourceGroups))
-        };
-    }
-    _restoreState(state) {
-        this.rawCellType = state.rawCellType.slice();
-        this.shapes = JSON.parse(JSON.stringify(state.shapes || []));
-        this.solver.sourceVx = state.sourceVx.slice();
-        this.solver.sourceVy = state.sourceVy.slice();
-        this.solver.dyeSources = JSON.parse(JSON.stringify(state.dyeSources));
-        this.solver.rotatingBodies = JSON.parse(JSON.stringify(state.rotatingBodies || []));
-        this.solver.sourceGroups = JSON.parse(JSON.stringify(state.sourceGroups || []));
-        // Nunca deixar _rasterizeShapes() rodar entre restaurar shapes[] e restaurar
-        // rotatingBodies[] — a ordem aqui (rasteriza livre+não-Rotor, DEPOIS reestampa Rotor) é
-        // a mesma usada na criação/reforma de um Rotor, ver _commitShape/_commitShapeReform.
-        this._rasterizeShapes();
-        this.solver.stampRotatingBodiesOntoGrid();
-        // O índice de seleção não sobrevive a undo/redo — a lista de corpos/formas pode ter mudado.
-        this.selectedRotorIndex = -1;
-        this.selectedShapeIndex = -1;
-        this.draggingShapeHandle = null;
-        this._updateFloatingPanel();
-        this.initFluid();
-    }
-    _saveState() {
-        this.undoStack.push(this._snapshotState());
-        this.redoStack = [];
-        this._updateUndoRedoButtons();
-        this._markDirty();
-    }
-    undo() {
-        if (this.undoStack.length === 0) return;
-        this.redoStack.push(this._snapshotState());
-        this._restoreState(this.undoStack.pop());
-        this._updateUndoRedoButtons();
-        this._markDirty();
-    }
-    redo() {
-        if (this.redoStack.length === 0) return;
-        this.undoStack.push(this._snapshotState());
-        this._restoreState(this.redoStack.pop());
-        this._updateUndoRedoButtons();
-        this._markDirty();
-    }
-    _updateUndoRedoButtons() {
-        this.zoomUndoButton.disabled = this.undoStack.length === 0;
-        this.zoomRedoButton.disabled = this.redoStack.length === 0;
-    }
-
     _takeScreenshot() {
         const url = this.canvas.toDataURL('image/png');
         const a = document.createElement('a');
@@ -3447,3 +3281,7 @@ applyMixin(FluidSimulationApp.prototype, HelpDialogs);
 applyMixin(FluidSimulationApp.prototype, Persistence);
 
 applyMixin(FluidSimulationApp.prototype, Selection);
+
+applyMixin(FluidSimulationApp.prototype, History);
+
+applyMixin(FluidSimulationApp.prototype, Viewport);
