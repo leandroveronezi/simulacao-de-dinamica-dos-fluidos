@@ -10,7 +10,7 @@ Simulador 2D de dinâmica dos fluidos (Lattice-Boltzmann D2Q9) 100% client-side:
 
 ## Comandos
 
-- `npm test` — testes do solver e dos objetos (Node puro, sem navegador): `tests/solver.test.mjs` e `tests/objetos.test.mjs`.
+- `npm test` — testes do solver e dos objetos (Node puro, sem navegador): `tests/solver.test.mjs`, `tests/objetos.test.mjs` e `tests/fisica.test.mjs` (leis físicas: conservação de massa, energia, Poiseuille, Strouhal do cilindro, arrasto, rotor).
 - `npm run test:ui` — teste de interface com Playwright (`playwright-core` + `/usr/bin/google-chrome`, caminho fixo em `tests/ui.test.mjs`). Executa um roteiro de desenho e compara o estado exportado com `tests/snapshots/ui-config.json`. Para regravar o instantâneo, só quando a mudança de comportamento for intencional: `UPDATE_SNAPSHOT=1 npm run test:ui`.
 - `npm run test:all` — todos os testes.
 - Um único teste: `node --test --test-name-pattern="trecho do nome" tests/solver.test.mjs`.
