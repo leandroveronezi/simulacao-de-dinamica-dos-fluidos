@@ -317,6 +317,18 @@ main {
     overflow: hidden;
 }
 
+/* Coluna canvas + barra de controle (bugs.md #50): o canvas e a barra dividem a mesma coluna
+   vertical, à esquerda da sidebar de ferramentas — a barra ocupa espaço PRÓPRIO abaixo do
+   canvas (encolhendo a altura dele) em vez de flutuar por cima, que era o pedido original
+   ("uma barra abaixo e não sobreposta"). */
+#canvas-column {
+    flex-grow: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
 .sidebar {
     flex-shrink: 0;
     background: var(--panel);
@@ -416,6 +428,37 @@ main {
 .tool-button.disabled {
     color: var(--ink-faint);
     cursor: not-allowed;
+}
+
+/* Opções da ferramenta Partículas (bugs.md #32) — só visível com a ferramenta ativa, ver
+   `_setActiveTool`. Fica num ribbon-group próprio pra herdar o mesmo separador vertical das
+   outras seções, sem precisar de nenhum CSS de container novo. */
+.ribbon-particle-options {
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.ribbon-particle-options select {
+    /* O `select` global do app é feito pra empilhar sob um `<label>` (width:100% + margin-top) —
+       aqui ele fica lado a lado com o resto do ribbon, então as duas propriedades precisam ser
+       resetadas ou o select estica pra ocupar a barra inteira. */
+    width: auto;
+    margin-top: 0;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.8rem;
+}
+
+.ribbon-inline-slider {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    color: var(--ink-dim);
+    white-space: nowrap;
+}
+
+.ribbon-inline-slider input[type="range"] {
+    width: 5rem;
 }
 
 /* ---------- Canvas ---------- */
@@ -525,51 +568,132 @@ canvas {
     margin: 0 0.2rem;
 }
 
-/* ---------- Barra de válvulas (Entrada/Saída liga-desliga, bugs.md #31) ---------- */
+/* ---------- Painel de controle (Entrada/Saída/Válvula, bugs.md #31/#50) ----------
+   Faixa própria ABAIXO do canvas (não mais flutuando por cima — pedido explícito do #50: "uma
+   barra abaixo e não sobreposta"), com o visual de painel de instrumentos que o usuário pediu
+   (interruptores robustos tipo bascule + indicador luminoso, inspirado na referência que ele
+   passou), um "módulo" por Entrada/Saída/Válvula na cena. */
 
-.viewport-valve-controls {
-    position: absolute;
-    left: 1rem;
-    bottom: 1rem;
+.control-panel-bar {
+    flex-shrink: 0;
     display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    max-width: min(60vw, 640px);
+    align-items: stretch;
+    gap: 0.6rem;
+    padding: 0.6rem 0.9rem;
     overflow-x: auto;
-    background: rgba(255, 255, 255, 0.82);
-    border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    padding: 0.4rem 0.6rem;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    box-shadow: 0 8px 24px rgba(16, 24, 34, 0.18);
-    z-index: 10;
+    background: linear-gradient(180deg, #2b333d, #1e242b);
+    border-top: 1px solid #10151a;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 -4px 12px rgba(0, 0, 0, 0.15);
 }
 
-.valve-chip {
+.control-unit {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 4.2rem;
+    padding: 0.5rem 0.6rem 0.4rem;
+    background: linear-gradient(180deg, #3a4552, #2c343d);
+    border: 1px solid #171b20;
+    border-radius: var(--radius-md);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.25);
+}
+
+.control-unit-label {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
-    flex-shrink: 0;
-    padding: 0.2rem 0.5rem;
-    border-radius: 6px;
+    gap: 0.3rem;
     font-family: var(--font-mono);
     font-size: 0.72rem;
-    color: var(--ink-dim);
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: #dfe6ec;
 }
 
-.valve-chip.closed {
-    color: var(--ink-dim);
-    opacity: 0.6;
+.control-unit-led {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #4a545f;
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.4);
+    transition: background-color .15s ease, box-shadow .15s ease;
 }
 
-.valve-chip i {
-    width: 12px;
-    text-align: center;
+.control-unit.open .control-unit-led {
+    background: #4ade80;
+    box-shadow: 0 0 6px 1px rgba(74, 222, 128, 0.7), inset 0 1px 1px rgba(0, 0, 0, 0.2);
 }
 
-.valve-chip input[role="switch"] {
-    margin: 0;
+.control-unit:not(.open) .control-unit-led {
+    background: #ff5d5d;
+    box-shadow: 0 0 6px 1px rgba(255, 93, 93, 0.55), inset 0 1px 1px rgba(0, 0, 0, 0.2);
+}
+
+/* Interruptor tipo "bascule" (rocker) — mais robusto/tátil que o `role="switch"` fininho usado
+   no resto do app, de propósito: aqui é pra ler como hardware físico, não como um toggle de
+   formulário comum. */
+.control-unit-switch,
+.control-unit-switch:checked {
+    /* Pico.css (base do projeto) estampa um ícone de check via `background-image` em QUALQUER
+       `[type=checkbox]:checked`, mesma especificidade da nossa própria regra — sem repetir a
+       supressão aqui dentro do `:checked` também, o check do Pico aparecia por cima do
+       interruptor (a "bascule" ficava com uma marquinha branca estranha no estado ligado). */
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: none;
+    width: 2.6rem;
+    height: 1.5rem;
+    margin: 0.15rem 0 0;
+    border-radius: 3px;
+    background: linear-gradient(180deg, #1a1e23, #24292f);
+    border: none;
+    box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.5);
+    position: relative;
+    cursor: pointer;
+}
+
+.control-unit-switch::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: calc(50% - 3px);
+    height: calc(100% - 4px);
+    border-radius: 2px;
+    background: linear-gradient(180deg, #7c8792, #565f68);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    transition: left .12s ease, background .12s ease;
+}
+
+.control-unit-switch:checked::before {
+    left: calc(50% + 1px);
+    background: linear-gradient(180deg, #6ee08a, #38a862);
+}
+
+.control-unit-switch:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.control-unit-speed {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 0.1rem;
+}
+
+.control-unit-speed input[type="range"] {
+    width: 3.4rem;
+    height: 3px;
+}
+
+.control-unit-speed span {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    color: #9aa7b3;
+    min-width: 1.6em;
+    text-align: right;
 }
 
 /* ---------- Painel de propriedades flutuante (formas vetoriais/Rotor) ---------- */
@@ -642,6 +766,109 @@ canvas {
 .floating-panel-geometry-edit input[type="number"]:focus-visible {
     outline: none;
     border-color: var(--accent);
+}
+
+/* ---------- Chave de 3 estágios do motor do Rotor ---------- */
+
+.rotor-motor-switch {
+    display: flex;
+    gap: 0;
+    margin-bottom: 0.55rem;
+}
+
+.rotor-motor-switch button {
+    flex: 1 1 0;
+    justify-content: center;
+    padding: 0.45rem 0;
+    border-radius: 0;
+    background: var(--inset);
+    border: 1px solid var(--line-strong);
+    color: var(--ink-dim);
+    box-shadow: none;
+}
+
+/* Encosta os três botões num bloco só, arredondando apenas as pontas — a chave precisa ler
+   como UMA peça de três posições, não como três botões soltos. */
+.rotor-motor-switch button:first-child {
+    border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.rotor-motor-switch button:last-child {
+    border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.rotor-motor-switch button + button {
+    border-left: none;
+}
+
+.rotor-motor-switch button:hover {
+    background: var(--line-strong);
+    border-color: var(--line-strong);
+    color: var(--ink);
+    filter: none;
+}
+
+.rotor-motor-switch button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+}
+
+/* ---------- Tamanho da grade (painel Simulação) ---------- */
+
+.grid-size-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.35rem;
+}
+
+.grid-size-row input[type="number"] {
+    /* `min-width: 0` porque um <input> tem largura intrínseca própria: sem isso ele se recusa a
+       encolher dentro do flex e o botão Aplicar é empurrado pra fora do painel. */
+    flex: 1 1 0;
+    /* Largura suficiente para o maior valor aceito (4 dígitos) sem o campo virar um risco, mas
+       ainda encolhível — a sidebar é estreita e o Aplicar não pode ser empurrado pra fora. */
+    min-width: 3.2rem;
+    background: var(--inset);
+    border: 1px solid var(--line-strong);
+    color: var(--ink);
+    border-radius: var(--radius);
+    padding: 0.4rem 0.45rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    text-align: center;
+}
+
+.grid-size-row input[type="number"]:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.grid-size-times {
+    color: var(--ink-dim);
+    font-size: 0.8rem;
+}
+
+button.grid-size-apply {
+    /* Mesma armadilha do Pico.css já documentada em `.icon-button`: `button { width: 100% }`
+       por padrão. Aqui ela colapsava os dois campos numéricos a quase nada e deixava o Aplicar
+       ocupando a linha inteira — a linha ficava com dois riscos e um botão gigante. */
+    width: auto;
+    flex: 0 0 auto;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.78rem;
+}
+
+.grid-size-hint {
+    display: block;
+    margin-bottom: 0.6rem;
+    font-size: 0.72rem;
+    color: var(--ink-dim);
+}
+
+.grid-size-hint.is-heavy {
+    color: var(--warn, #ffb454);
 }
 
 .floating-panel-body label:first-of-type {

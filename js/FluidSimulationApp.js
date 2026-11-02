@@ -1,5 +1,5 @@
-import { FluidSolver } from './FluidSolver.js?v=20260713p';
-import { Renderer } from './Renderer.js?v=20260713p';
+import { FluidSolver } from './FluidSolver.js?v=20260908d';
+import { Renderer } from './Renderer.js?v=20260908d';
 
 /**
  * @class FluidSimulationApp
@@ -8,6 +8,37 @@ import { Renderer } from './Renderer.js?v=20260713p';
  */
 export class FluidSimulationApp {
     static PX_PER_SQUARE = 5;
+
+    // Propriedades de ajuste de um Rotor. Existe como lista porque elas viajam JUNTAS por vários
+    // caminhos (criar, reformar ao arrastar um handle, mover o pivô, preencher, exportar,
+    // importar) e cada um copiava as três à mão — acrescentar uma quarta significava lembrar de
+    // seis lugares. Ver `_rotorPropsFrom`.
+    static ROTOR_PROP_KEYS = ['massMultiplier', 'damping', 'stiffness', 'motorDirection', 'motorSpeed'];
+
+    // Limites do tamanho de grade configurável (bugs.md #49). O mínimo por eixo evita uma grade
+    // pequena demais para o solver ter o que resolver (as bordas ocupariam a cena inteira). O
+    // teto de ÁREA é o que realmente importa para o desempenho: o custo de um passo é
+    // proporcional ao número de células, não ao formato. Medido neste solver: ~13 milhões de
+    // células·passo por segundo, então 250 mil células dão da ordem de 50 passos/s — perto do
+    // limite do que ainda roda liso no alvo de 200 passos/s do slider de animação. Acima disso a
+    // dica avisa que vai ficar lento, mas deixa aplicar: é escolha do usuário, e uma cena grande
+    // rodando devagar continua sendo útil.
+    static GRID_MIN_DIM = 40;
+    static GRID_MAX_DIM = 2000;
+    static GRID_HEAVY_AREA = 250000;
+    static GRID_MAX_AREA = 1500000;
+
+    // Peso inicial de cada tipo de partícula física (bugs.md #32) ao escolher no seletor — só um
+    // ponto de partida, o slider de Peso continua livre pra ajustar depois. Sem isso, trocar de
+    // tipo não mudava a física nenhuma (só o desenho), e uma "Folha" escolhida depois de mexer no
+    // peso pra outra coisa saía do mesmo tamanho/arrasto/gravidade de uma Bolinha.
+    static PARTICLE_TYPE_DEFAULT_WEIGHT = { leaf: 0.15, ball: 0.5, box: 0.85 };
+
+    // Distância (em células) dentro da qual a ponta de uma forma gruda na borda do domínio —
+    // ver `_snapToDomainEdge`. 3 é largo o bastante pra pegar um arraste "até o fim" sem
+    // precisar de precisão de pixel, e estreito o bastante pra não atrapalhar quem quer mesmo
+    // uma forma começando perto (mas não colada) na parede.
+    static EDGE_SNAP_CELLS = 3;
     static GRID_SIZE_MULTIPLIER = 1;
     static MIN_ZOOM = 1 / FluidSimulationApp.GRID_SIZE_MULTIPLIER;
     static MAX_ZOOM = 8;
@@ -97,10 +128,26 @@ export class FluidSimulationApp {
         this.rotorStiffnessSlider = this.root.querySelector('#rotorStiffnessSlider');
         this.rotorStiffnessValue = this.root.querySelector('#rotorStiffnessValue');
         this.rotorStiffnessHelp = this.root.querySelector('#rotorStiffnessHelp');
+        this.rotorMotorSwitch = this.root.querySelector('.rotor-motor-switch');
+        this.rotorMotorButtons = Array.from(this.root.querySelectorAll('.rotor-motor-switch button'));
+        this.rotorMotorSpeedRow = this.root.querySelector('#rotorMotorSpeedRow');
+        this.rotorMotorSpeedSlider = this.root.querySelector('#rotorMotorSpeedSlider');
+        this.rotorMotorSpeedValue = this.root.querySelector('#rotorMotorSpeedValue');
+        this.rotorMotorHelp = this.root.querySelector('#rotorMotorHelp');
+        this.meshHoleSizeSlider = this.root.querySelector('#meshHoleSizeSlider');
+        this.meshHoleSizeValue = this.root.querySelector('#meshHoleSizeValue');
+        this.meshHoleSizeHelp = this.root.querySelector('#meshHoleSizeHelp');
+        this.floatingPanelMeshControls = this.root.querySelector('#floatingPanelMeshControls');
+        // Estes 4 vivem na .ribbon, IRMÃ de <main> (this.root), não descendente — precisa de
+        // document.querySelector, não this.root, mesmo motivo já documentado em `menuItems`.
+        this.particleToolOptions = document.querySelector('#particleToolOptions');
+        this.particleTypeSelect = document.querySelector('#particleTypeSelect');
+        this.particleWeightSlider = document.querySelector('#particleWeightSlider');
+        this.particleWeightValue = document.querySelector('#particleWeightValue');
         this.floatingPropertyPanel = this.root.querySelector('#floatingPropertyPanel');
         this.floatingPanelHeader = this.root.querySelector('.floating-panel-header');
         this.simulationControlsWidget = this.root.querySelector('#simulationControlsWidget');
-        this.valveControlsWidget = this.root.querySelector('#valveControlsWidget');
+        this.valveControlsWidget = this.root.querySelector('#controlPanelBar');
         this.floatingPanelTitle = this.root.querySelector('#floatingPanelTitle');
         this.floatingPanelCloseButton = this.root.querySelector('#floatingPanelCloseButton');
         this.floatingPanelPositionEdit = this.root.querySelector('#floatingPanelPositionEdit');
@@ -139,6 +186,12 @@ export class FluidSimulationApp {
         this.speedSlider = this.root.querySelector('#speedSlider');
         this.speedValue = this.root.querySelector('#speedValue');
         this.speedHelp = this.root.querySelector('#speedHelp');
+        this.boundaryModeHelp = this.root.querySelector('#boundaryModeHelp');
+        this.gridWidthInput = this.root.querySelector('#gridWidthInput');
+        this.gridHeightInput = this.root.querySelector('#gridHeightInput');
+        this.applyGridSizeButton = this.root.querySelector('#applyGridSizeButton');
+        this.gridSizeHint = this.root.querySelector('#gridSizeHint');
+        this.gridSizeHelp = this.root.querySelector('#gridSizeHelp');
     }
 
     /**
@@ -185,7 +238,9 @@ export class FluidSimulationApp {
         this.rotorDefaults = {
             massMultiplier: 1,
             damping: 0.05,
-            stiffness: 0
+            stiffness: 0,
+            motorDirection: 0,
+            motorSpeed: 0.5
         };
         this.activeProjectId = null;
         this.activeProjectName = null;
@@ -340,6 +395,14 @@ export class FluidSimulationApp {
         this.viscosityHelp.addEventListener('click', () => this._showViscosityHelp());
         this.visualizationHelp.addEventListener('click', () => this._showVisualizationHelp());
         this.speedHelp.addEventListener('click', () => this._showSpeedHelp());
+        this.boundaryModeHelp.addEventListener('click', () => this._showBoundaryModeHelp());
+        this.gridSizeHelp.addEventListener('click', () => this._showGridSizeHelp());
+        this.applyGridSizeButton.addEventListener('click', () => this._applyGridSize());
+        // Digitar já atualiza a dica de custo (contagem de células / aviso de grade pesada),
+        // antes de aplicar — é a informação que decide o valor a escolher.
+        for (const input of [this.gridWidthInput, this.gridHeightInput]) {
+            input.addEventListener('input', () => this._updateGridSizeHint());
+        }
         this.copySelectionButton.addEventListener('click', () => this._copySelection());
         this.cutSelectionButton.addEventListener('click', () => this._cutSelection());
         this.flipHorizontalButton.addEventListener('click', () => this._flipSelectionHorizontal());
@@ -381,9 +444,42 @@ export class FluidSimulationApp {
             this._markDirty();
         });
         this.rotorStiffnessHelp.addEventListener('click', () => this._showRotorStiffnessHelp());
+        this.rotorMotorHelp.addEventListener('click', () => this._showRotorMotorHelp());
+        for (const button of this.rotorMotorButtons) {
+            button.addEventListener('click', () => {
+                this._writeRotorProperty('motorDirection', Number(button.dataset.motor));
+                this._syncRotorMotorControls(Number(button.dataset.motor));
+                this._markDirty();
+            });
+        }
+        this.rotorMotorSpeedSlider.addEventListener('input', () => {
+            const pct = Number(this.rotorMotorSpeedSlider.value);
+            this.rotorMotorSpeedValue.innerHTML = `${pct}%`;
+            this._writeRotorProperty('motorSpeed', pct / 100);
+            this._markDirty();
+        });
+        this.meshHoleSizeSlider.addEventListener('input', () => this._applyMeshHoleSize());
+        this.meshHoleSizeHelp.addEventListener('click', () => this._showMeshHoleSizeHelp());
+        this.particleWeightSlider.addEventListener('input', () => {
+            this.particleWeightValue.textContent = Number(this.particleWeightSlider.value).toFixed(2);
+        });
+        // Trocar o tipo pula o peso pro padrão daquele tipo — sem isso, escolher "Folha" depois
+        // de ter mexido no peso pra outra coisa carimbava uma folha do mesmo tamanho/arrasto de
+        // uma bolinha, só com o desenho diferente (o peso é o que decide a física de verdade,
+        // ver `particlePhysicsFromWeight`). O peso continua livre pra ajustar depois do tipo
+        // escolhido, isto só define um ponto de partida sensato.
+        this.particleTypeSelect.addEventListener('change', () => {
+            const weight = FluidSimulationApp.PARTICLE_TYPE_DEFAULT_WEIGHT[this.particleTypeSelect.value] ?? 0.5;
+            this.particleWeightSlider.value = weight;
+            this.particleWeightValue.textContent = weight.toFixed(2);
+        });
         this.floatingPanelCloseButton.addEventListener('click', () => {
             this.selectedShapeIndex = -1;
             this.selectedRotorIndex = -1;
+            // Sem esta, "fechar" o painel de uma Fumaça selecionada não fechava de verdade —
+            // _updateFloatingPanel recalcula a seleção a partir deste índice e o painel reabria
+            // sozinho na chamada seguinte (achado consertando o painel da Grade).
+            this.selectedDyeSourceIndex = -1;
             this._updateFloatingPanel();
             this._requestPaint();
         });
@@ -776,8 +872,16 @@ export class FluidSimulationApp {
         this.canvas.width = this.canvasContainer.clientWidth;
         this.canvas.height = this.canvasContainer.clientHeight;
         if (xdim === undefined || ydim === undefined) {
-            const viewportXdim = Math.floor((this.canvasContainer.clientWidth - Renderer.RULER_SIZE) / this.pxPerSquare);
-            const viewportYdim = Math.floor((this.canvasContainer.clientHeight - Renderer.RULER_SIZE) / this.pxPerSquare);
+            // Folga de algumas células entre a borda da grade e a borda da área visível. Sem ela
+            // a grade terminava EXATAMENTE no último pixel da janela: a última linha (y=0) e a
+            // última coluna existiam, mas eram impossíveis de alcançar com o mouse na prática —
+            // então fechar uma parede/Grade "de ponta a ponta" sempre deixava um vão embaixo, e
+            // é justamente pelo chão que as partículas pesadas escapam (a gravidade leva todas
+            // pra lá). Com a folga + o snap de `_snapToDomainEdge`, arrastar até perto do fim
+            // fecha de verdade.
+            const margin = FluidSimulationApp.EDGE_SNAP_CELLS * this.pxPerSquare;
+            const viewportXdim = Math.floor((this.canvasContainer.clientWidth - Renderer.RULER_SIZE - margin) / this.pxPerSquare);
+            const viewportYdim = Math.floor((this.canvasContainer.clientHeight - Renderer.RULER_SIZE - margin) / this.pxPerSquare);
             xdim = viewportXdim * FluidSimulationApp.GRID_SIZE_MULTIPLIER;
             ydim = viewportYdim * FluidSimulationApp.GRID_SIZE_MULTIPLIER;
         }
@@ -787,6 +891,7 @@ export class FluidSimulationApp {
         this.solver.initFluid(this.solver.boundaryMode === 'open' ? 0 : Number(this.speedSlider.value));
         this.solver.initTracers(this.tracerCheck.checked);
         this.solver.initDyeTracers();
+        this.solver.initParticles();
 
         this.rawCellType = new Uint8Array(xdim * ydim);
         // Marca quais células são cobertas por uma forma vetorial tipo 'line' — o Renderer usa
@@ -810,6 +915,7 @@ export class FluidSimulationApp {
         this._resetView();
         this.selectedRotorIndex = -1;
         if (this.rotorMassSlider) this._updateFloatingPanel();
+        this._syncGridSizeInputs();
 
         this._requestPaint();
     }
@@ -838,6 +944,9 @@ export class FluidSimulationApp {
 
         this.canvasContainer.classList.toggle('tool-pan', toolName === 'pan');
         this.canvasContainer.classList.toggle('tool-pointer', toolName === 'pointer');
+        // Opções da ferramenta Partículas (tipo/peso pro PRÓXIMO emissor) só fazem sentido com
+        // ela ativa — bugs.md #32.
+        if (this.particleToolOptions) this.particleToolOptions.hidden = toolName !== 'particles';
     }
 
     /**
@@ -854,6 +963,55 @@ export class FluidSimulationApp {
 
     /**
      * @private
+     * @description Gruda uma ponta de forma na borda do domínio quando ela cai a poucas células
+     * dela. Sem isto é praticamente impossível fechar uma parede/Grade de ponta a ponta: a última
+     * linha da grade cai no último pixel da janela (e some de vez quando o painel de controle
+     * aparece embaixo), então mesmo arrastando "até o fim" sobrava um vão de várias células —
+     * e é justamente pelo chão que as partículas pesadas escapam, já que a gravidade leva todas
+     * exatamente pra lá. Só age perto da borda, então desenhar no meio da cena continua igual.
+     */
+    _snapToDomainEdge(point) {
+        const margin = FluidSimulationApp.EDGE_SNAP_CELLS;
+        const { xdim, ydim } = this.solver;
+        let { x, y } = point;
+        if (x <= margin) x = 0;
+        else if (x >= xdim - 1 - margin) x = xdim - 1;
+        if (y <= margin) y = 0;
+        else if (y >= ydim - 1 - margin) y = ydim - 1;
+        return { x, y };
+    }
+
+    /**
+     * @private
+     * @description Estende a ponta de uma linha até encostar numa parede já existente, quando
+     * ela para a poucas células de uma. Motivo (bugs.md #32): uma Grade atravessando um duto
+     * "parece" encostar nas paredes — o traço vetorial é largo (`lineWidth` 1,75) — mas a
+     * rasterização física é de UMA célula, então parar 1 célula antes da parede deixa um vão
+     * invisível. Medido: um vão de 1 célula só numa ponta já deixou 3 de 6 bolinhas escaparem
+     * pela lateral (com a Grade encostada nas duas paredes, nenhuma escapa). Anda no máximo
+     * `EDGE_SNAP_CELLS` células e só na direção da própria linha, então não "gruda" em nada
+     * longe nem muda uma forma desenhada longe de paredes.
+     */
+    _snapEndToNearbySolid(point, dirX, dirY) {
+        const len = Math.hypot(dirX, dirY);
+        if (len === 0) return point;
+        const ux = dirX / len,
+            uy = dirY / len;
+        const { xdim, ydim } = this.solver;
+        for (let step = 1; step <= FluidSimulationApp.EDGE_SNAP_CELLS; step++) {
+            const x = Math.round(point.x + ux * step),
+                y = Math.round(point.y + uy * step);
+            if (x < 0 || x >= xdim || y < 0 || y >= ydim) break;
+            const t = this.solver.cellType[x + y * xdim];
+            if (t === FluidSolver.CELL_TYPE.BARRIER || t === FluidSolver.CELL_TYPE.MESH) {
+                return { x, y };
+            }
+        }
+        return point;
+    }
+
+    /**
+     * @private
      * @description Retorna o CELL_TYPE correspondente ao tipo de pintura ativo no momento.
      */
     _activeCellType() {
@@ -866,6 +1024,8 @@ export class FluidSimulationApp {
                 return FluidSolver.CELL_TYPE.ROTOR;
             case 'valve':
                 return FluidSolver.CELL_TYPE.VALVE;
+            case 'mesh':
+                return FluidSolver.CELL_TYPE.MESH;
             default:
                 return FluidSolver.CELL_TYPE.BARRIER;
         }
@@ -1013,6 +1173,9 @@ export class FluidSimulationApp {
             return;
         }
 
+        // 'particles' fica de fora de propósito: objetos avulsos não entram no undo (mesmo
+        // tratamento que traçadores/fumaça já recebem — são estado "vivo" da simulação, não
+        // geometria de design; ver `addParticle`).
         if (['brush', 'fill', 'smoke', 'eraser_line'].includes(this.activeTool)) {
             this._saveState();
         }
@@ -1044,6 +1207,21 @@ export class FluidSimulationApp {
                         x: gridLoc.x,
                         y: gridLoc.y
                     });
+                }
+                break;
+            case 'particles':
+                if (gridLoc.x >= 0 && gridLoc.y >= 0) {
+                    // Um objeto avulso por clique (bugs.md #32) — sem fonte contínua, pedido
+                    // explícito do usuário (o modelo anterior, copiado da Fumaça, tratava cada
+                    // clique como um ponto emitindo pra sempre). Mesmo raciocínio da Fumaça pra
+                    // limpar embaixo: um objeto carimbado em cima de uma Barreira nasceria preso
+                    // dentro do sólido.
+                    this._eraseAt(gridLoc);
+                    this.solver.addParticle(
+                        gridLoc.x, gridLoc.y,
+                        Number(this.particleWeightSlider.value),
+                        this.particleTypeSelect.value
+                    );
                 }
                 break;
         }
@@ -1173,11 +1351,7 @@ export class FluidSimulationApp {
                 // maxRadius relativos ao pivô novo, mantendo as mesmas células (a forma na tela
                 // não muda, só o eixo de rotação). angle/omega reiniciam em 0, igual a qualquer
                 // outra reforma — preserva massa/amortecimento/rigidez.
-                this.solver.addRotatingBody(body.currentCells, { x: this.mouseGridPos.x, y: this.mouseGridPos.y }, {
-                    massMultiplier: body.massMultiplier,
-                    damping: body.damping,
-                    stiffness: body.stiffness
-                }, bodyIndex);
+                this.solver.addRotatingBody(body.currentCells, { x: this.mouseGridPos.x, y: this.mouseGridPos.y }, this._rotorPropsFrom(body), bodyIndex);
                 this._markDirty();
             }
             this.draggingRotorPivot = null;
@@ -1214,7 +1388,7 @@ export class FluidSimulationApp {
             } else if (this.activeTool === 'eraser') {
                 this._saveState();
                 this._eraseRectangleOnGrid(this.toolStartPoint, endPoint);
-            } else if (!['brush', 'fill', 'smoke', 'pointer', 'eraser_line'].includes(this.activeTool)) {
+            } else if (!['brush', 'fill', 'smoke', 'particles', 'pointer', 'eraser_line'].includes(this.activeTool)) {
                 // Linha/retângulo/elipse/arredondado: vira um registro vetorial em shapes[] em
                 // vez de pintura imediata — é isso que habilita selecionar/esticar/mover/apagar
                 // essa forma depois (edição vetorial), no lugar de pixels sem memória de origem.
@@ -1254,6 +1428,18 @@ export class FluidSimulationApp {
      */
     _commitShape(tool, start, end) {
         const cellType = this._activeCellType();
+        start = this._snapToDomainEdge(start);
+        end = this._snapToDomainEdge(end);
+        // Só para linha: encostar as duas pontas numa parede próxima fecha o vão lateral que
+        // deixava partículas escaparem pela ponta de uma Grade dentro de um duto (ver
+        // `_snapEndToNearbySolid`). Formas de área (retângulo/elipse) não têm "ponta" nesse
+        // sentido, então ficam de fora.
+        if (tool === 'line') {
+            const dx = end.x - start.x,
+                dy = end.y - start.y;
+            start = this._snapEndToNearbySolid(start, -dx, -dy);
+            end = this._snapEndToNearbySolid(end, dx, dy);
+        }
         const shape = {
             id: this._nextShapeId++,
             cellType,
@@ -1285,14 +1471,20 @@ export class FluidSimulationApp {
             }
             this.solver.addSourceGroup(cells, shape.vx, shape.vy);
         } else if (cellType === FluidSolver.CELL_TYPE.ROTOR) {
-            shape.massMultiplier = this.rotorDefaults.massMultiplier;
-            shape.damping = this.rotorDefaults.damping;
-            shape.stiffness = this.rotorDefaults.stiffness;
-            this.solver.addRotatingBody(cells, null, { ...this.rotorDefaults });
+            Object.assign(shape, this._rotorPropsFrom(this.rotorDefaults));
+            this.solver.addRotatingBody(cells, null, this._rotorPropsFrom(this.rotorDefaults));
         } else if (cellType === FluidSolver.CELL_TYPE.VALVE) {
             // Nasce fechada (bloqueando, como parede sólida) — precisa ser aberta explicitamente
             // pelo widget, ver bugs.md #40.
             shape.enabled = false;
+        } else if (cellType === FluidSolver.CELL_TYPE.MESH) {
+            shape.holeSize = FluidSolver.MESH_DEFAULT_HOLE_SIZE;
+        } else if (cellType === FluidSolver.CELL_TYPE.SINK) {
+            // Força de sucção da Saída (bugs.md #52) — mesmo padrão do `holeSize` da Grade: a
+            // "verdade" mora aqui em `shape.suction`, espelhada pro array por célula do solver
+            // toda vez que a grade é rasterizada, ajustável depois pelo slider no painel de
+            // controle (ver `_refreshValveWidget`).
+            shape.suction = FluidSolver.SINK_DEFAULT_SUCTION;
         }
 
         this.shapes.push(shape);
@@ -1408,20 +1600,10 @@ export class FluidSimulationApp {
             const bodyIdx = this._findRotorNearPivot(oldCentroid);
             if (bodyIdx >= 0) {
                 const body = this.solver.rotatingBodies[bodyIdx];
-                shape.massMultiplier = body.massMultiplier;
-                shape.damping = body.damping;
-                shape.stiffness = body.stiffness;
-                this.solver.addRotatingBody(cells, null, {
-                    massMultiplier: body.massMultiplier,
-                    damping: body.damping,
-                    stiffness: body.stiffness
-                }, bodyIdx);
+                Object.assign(shape, this._rotorPropsFrom(body));
+                this.solver.addRotatingBody(cells, null, this._rotorPropsFrom(body), bodyIdx);
             } else {
-                this.solver.addRotatingBody(cells, null, {
-                    massMultiplier: shape.massMultiplier,
-                    damping: shape.damping,
-                    stiffness: shape.stiffness
-                });
+                this.solver.addRotatingBody(cells, null, this._rotorPropsFrom(shape));
             }
         }
 
@@ -1430,7 +1612,6 @@ export class FluidSimulationApp {
             for (const { x, y } of cells) {
                 this.solver.cellType[x + y * this.solver.xdim] = FluidSolver.CELL_TYPE.ROTOR;
             }
-            this.solver.invalidateSinkDamping();
         }
         return true;
     }
@@ -1494,11 +1675,7 @@ export class FluidSimulationApp {
             this._saveState();
             const bodyIndex = this.selectedRotorIndex;
             const body = this.solver.rotatingBodies[bodyIndex];
-            this.solver.addRotatingBody(body.currentCells, { x: newX, y: newY }, {
-                massMultiplier: body.massMultiplier,
-                damping: body.damping,
-                stiffness: body.stiffness
-            }, bodyIndex);
+            this.solver.addRotatingBody(body.currentCells, { x: newX, y: newY }, this._rotorPropsFrom(body), bodyIndex);
             this._markDirty();
             this._updateFloatingPanel();
             this._requestPaint();
@@ -1522,10 +1699,46 @@ export class FluidSimulationApp {
 
     /**
      * @private
+     * @description Aplica um vx/vy novo a uma Entrada já existente, mantendo `shape.vx/vy` em
+     * sincronia com `solver.sourceGroups`/`sourceVx/vy` (mesma sincronização que
+     * `_confirmDirectionDrag` já faz pro arraste). Extraído de `_applySourceVelocity` pra ser
+     * reaproveitado pelo slider de velocidade inline do painel de controle (bugs.md #50), que
+     * precisa da mesma sincronização mas não passa pelos campos do painel flutuante.
+     */
+    _setSourceVelocity(shape, vx, vy) {
+        shape.vx = vx;
+        shape.vy = vy;
+        const centroid = { x: (shape.x0 + shape.x1) / 2, y: (shape.y0 + shape.y1) / 2 };
+        const groupIdx = this._findSourceGroupNear(centroid);
+        if (groupIdx >= 0) {
+            this.solver.updateSourceGroupVelocity(groupIdx, vx, vy);
+        } else {
+            this._rasterizeShapes();
+        }
+    }
+
+    /**
+     * @private
+     * @description Ajusta a força de sucção de uma Saída (bugs.md #52), chamado a cada tick do
+     * arrasto do slider no painel de controle. Escreve `solver.sinkStrength` diretamente nas
+     * células da forma, SEM passar por `_rasterizeShapes()` — que reconstrói `innerHTML` do
+     * próprio painel (`_refreshValveWidget`) e destruiria o slider (e o arrasto em andamento)
+     * no meio do gesto. Mesmo motivo pelo qual o slider de velocidade da Entrada usa
+     * `updateSourceGroupVelocity` em vez de re-rasterizar; aqui não existe um "grupo" próprio no
+     * solver pra Saída, então a atualização direta por célula faz esse mesmo papel.
+     */
+    _setSinkSuction(shape, suction) {
+        shape.suction = Math.max(0, Math.min(FluidSolver.SINK_MAX_SUCTION, suction));
+        this._replayShapeGeometry(shape, (x, y) => {
+            if (x < 0 || x >= this.solver.xdim || y < 0 || y >= this.solver.ydim) return;
+            this.solver.sinkStrength[x + y * this.solver.xdim] = shape.suction;
+        });
+    }
+
+    /**
+     * @private
      * @description Aplica velocidade/ângulo do fluxo digitados no painel flutuante pra uma
-     * Entrada selecionada — mesmo efeito de arrastar a seta, só que com um valor exato. Mantém
-     * `shape.vx/vy` em sincronia com `solver.sourceGroups`/`sourceVx/vy` (mesma sincronização
-     * que `_confirmDirectionDrag` já faz pro arraste).
+     * Entrada selecionada — mesmo efeito de arrastar a seta, só que com um valor exato.
      */
     _applySourceVelocity() {
         if (this.selectedShapeIndex < 0) return;
@@ -1535,16 +1748,7 @@ export class FluidSimulationApp {
 
         const speed = Math.max(0, Math.min(FluidSimulationApp.MAX_SOURCE_SPEED, Number(this.floatingPanelSpeedInput.value) || 0));
         const angleRad = (Number(this.floatingPanelFlowAngleInput.value) || 0) * Math.PI / 180;
-        shape.vx = speed * Math.cos(angleRad);
-        shape.vy = speed * Math.sin(angleRad);
-
-        const centroid = { x: (shape.x0 + shape.x1) / 2, y: (shape.y0 + shape.y1) / 2 };
-        const groupIdx = this._findSourceGroupNear(centroid);
-        if (groupIdx >= 0) {
-            this.solver.updateSourceGroupVelocity(groupIdx, shape.vx, shape.vy);
-        } else {
-            this._rasterizeShapes();
-        }
+        this._setSourceVelocity(shape, speed * Math.cos(angleRad), speed * Math.sin(angleRad));
         this._updateFloatingPanel();
         this._requestPaint();
     }
@@ -1563,6 +1767,32 @@ export class FluidSimulationApp {
         shape.lineWidth = Number.isFinite(width) ? Math.max(1, Math.min(4, width)) : FluidSimulationApp.DEFAULT_LINE_WIDTH;
         this._updateFloatingPanel();
         this._requestPaint();
+    }
+
+    /**
+     * @private
+     * @description Ajusta o furo de uma Grade selecionada (bugs.md #32) — muda física de
+     * verdade (o que uma partícula consegue ou não atravessar), então precisa re-rasterizar o
+     * array por célula do solver, diferente do puramente-cosmético `_applyLineWidth`.
+     */
+    _applyMeshHoleSize() {
+        if (this.selectedShapeIndex < 0) return;
+        const shape = this.shapes[this.selectedShapeIndex];
+        if (shape.cellType !== FluidSolver.CELL_TYPE.MESH) return;
+        this._saveState();
+        shape.holeSize = Number(this.meshHoleSizeSlider.value);
+        this.meshHoleSizeValue.textContent = shape.holeSize.toFixed(2);
+        this._rasterizeShapes();
+        this._markDirty();
+        this._requestPaint();
+    }
+
+    _showMeshHoleSizeHelp() {
+        Swal.fire({
+            title: 'Tamanho do Furo da Grade',
+            icon: 'info',
+            html: ` <p>Controla só QUAIS PARTÍCULAS FÍSICAS conseguem atravessar esta Grade — uma partícula passa quando o próprio diâmetro é menor que o furo, e é barrada (quica de volta) quando é maior.</p> <p>Vento, fumaça e as setas de traçador sempre atravessam a Grade (com a resistência de sempre) — o furo não afeta esses três, só as partículas.</p> <div class="note"> Diâmetro de cada partícula, pelos pesos padrão: Folha ~0,47 célula, Bolinha ~0,73, Caixa ~0,99 (o Peso na barra de ferramentas muda isso). O padrão de fábrica é <strong>0,30</strong> — menor que qualquer partícula, ou seja, a Grade segura tudo. Abra o furo para deixar as menores passarem: em 0,5 a Folha passa; em 0,8 Folha e Bolinha passam; acima de 1,0 passa tudo. </div> <div class="note"> <strong>Se algo estiver escapando:</strong> confira se a Grade encosta de verdade nas duas paredes — um vão de UMA célula na ponta já é suficiente para as partículas passarem por ali. Arrastar a linha até um pouco além da parede faz ela grudar sozinha. </div>`
+        });
     }
 
     /**
@@ -1844,6 +2074,50 @@ export class FluidSimulationApp {
      * Rotor. Mantém o metadado da forma vetorial correspondente em sincronia, se houver uma
      * (pra sobreviver a export/import e a uma eventual reforma).
      */
+    /**
+     * @private
+     * @description Coleta as propriedades de ajuste de Rotor de uma origem qualquer (um corpo do
+     * solver, uma forma vetorial, uma configuração importada), caindo no padrão para as que
+     * faltarem — é o que permite um arquivo salvo antes de uma propriedade existir continuar
+     * abrindo com o valor padrão dela.
+     */
+    _rotorPropsFrom(source) {
+        const out = {};
+        for (const key of FluidSimulationApp.ROTOR_PROP_KEYS) {
+            out[key] = source?.[key] ?? this.rotorDefaults[key];
+        }
+        return out;
+    }
+
+    /**
+     * @private
+     * @description Deixa a chave de 3 posições e o slider de velocidade coerentes com a direção
+     * dada: marca o botão certo como ativo e mostra a velocidade só quando o motor está ligado
+     * (com o motor desligado ela não teria efeito nenhum, e um slider inerte na tela só confunde).
+     */
+    _syncRotorMotorControls(direction, speed) {
+        if (!this.rotorMotorButtons) return;
+        const dir = Number(direction) || 0;
+        for (const button of this.rotorMotorButtons) {
+            button.classList.toggle('active', Number(button.dataset.motor) === dir);
+        }
+        if (speed !== undefined) {
+            const pct = Math.round(speed * 100);
+            this.rotorMotorSpeedSlider.value = pct;
+            this.rotorMotorSpeedValue.innerHTML = `${pct}%`;
+            this._updateSliderFill(this.rotorMotorSpeedSlider);
+        }
+        this.rotorMotorSpeedRow.hidden = dir === 0;
+    }
+
+    _showRotorMotorHelp() {
+        Swal.fire({
+            title: 'Motor do Rotor',
+            icon: 'info',
+            html: ` <p>A chave tem três posições: girar para a <strong>esquerda</strong> (anti-horário), <strong>desligado</strong> no meio, e girar para a <strong>direita</strong> (horário).</p> <ul> <li><strong>Desligado:</strong> o Rotor é uma turbina livre — só o fluido o move. É o comportamento de sempre.</li> <li><strong>Ligado:</strong> o Rotor vira motor e passa a mover o fluido: ele gira sozinho e sopra/arrasta o ar em volta, mesmo sem nenhuma Entrada na cena.</li> </ul> <p>A <strong>Velocidade do Motor</strong> é uma porcentagem da rotação máxima que o solver aceita com estabilidade. O motor persegue essa rotação, mas cede um pouco sob carga (uma pá grande ou um obstáculo perto seguram o giro), como um ventilador de verdade.</p> <div class="note"> As outras propriedades continuam valendo com o motor ligado: <em>Massa/Densidade</em> muda a rapidez com que ele chega na rotação escolhida (e quanto tempo continua girando ao desligar), e <em>Amortecimento</em> freia o giro. </div>`
+        });
+    }
+
     _writeRotorProperty(key, value) {
         const idx = this._activeRotorBodyIndexForPanel ?? -1;
         if (idx >= 0 && this.solver.rotatingBodies[idx]) {
@@ -1897,6 +2171,7 @@ export class FluidSimulationApp {
             this.floatingPanelGeometryRect.hidden = true;
             this.floatingPanelSourceControls.hidden = true;
             this.floatingPanelRotorControls.hidden = true;
+            this.floatingPanelMeshControls.hidden = true;
             this.floatingPanelPositionEdit.hidden = false;
             const source = this.solver.dyeSources[dyeIndex];
             const active = document.activeElement;
@@ -1913,7 +2188,9 @@ export class FluidSimulationApp {
             [FluidSolver.CELL_TYPE.BARRIER]: 'Barreira',
             [FluidSolver.CELL_TYPE.SOURCE]: 'Entrada',
             [FluidSolver.CELL_TYPE.SINK]: 'Saída',
-            [FluidSolver.CELL_TYPE.ROTOR]: 'Rotor'
+            [FluidSolver.CELL_TYPE.ROTOR]: 'Rotor',
+            [FluidSolver.CELL_TYPE.VALVE]: 'Válvula',
+            [FluidSolver.CELL_TYPE.MESH]: 'Grade'
         };
         if (shape) {
             this.floatingPanelTitle.textContent = typeLabels[shape.cellType] || 'Forma';
@@ -1976,6 +2253,18 @@ export class FluidSimulationApp {
             }
         }
 
+        const showMeshControls = !!shape && shape.cellType === FluidSolver.CELL_TYPE.MESH;
+        this.floatingPanelMeshControls.hidden = !showMeshControls;
+        if (showMeshControls) {
+            const active = document.activeElement;
+            if (active !== this.meshHoleSizeSlider) {
+                const holeSize = shape.holeSize ?? FluidSolver.MESH_DEFAULT_HOLE_SIZE;
+                this.meshHoleSizeSlider.value = holeSize;
+                this.meshHoleSizeValue.textContent = holeSize.toFixed(2);
+                this._updateSliderFill(this.meshHoleSizeSlider);
+            }
+        }
+
         const showRotorControls = rotorBodyIndex >= 0;
         this.floatingPanelRotorControls.hidden = !showRotorControls;
         if (showRotorControls) {
@@ -1989,6 +2278,7 @@ export class FluidSimulationApp {
             this._updateSliderFill(this.rotorMassSlider);
             this._updateSliderFill(this.rotorDampingSlider);
             this._updateSliderFill(this.rotorStiffnessSlider);
+            this._syncRotorMotorControls(body.motorDirection ?? 0, body.motorSpeed ?? this.rotorDefaults.motorSpeed);
         }
 
         if (!this.floatingPropertyPanel.dataset.manuallyPositioned) {
@@ -2102,24 +2392,17 @@ export class FluidSimulationApp {
 
     /**
      * @private
-     * @description Roda uma operação booleana de polígono (união/diferença/etc.) via Clipper.js
-     * entre dois conjuntos de anéis (coordenada absoluta de grade) — usado por `_floodFill`
-     * (ctUnion) e `_eraseRectangleOnGrid` (ctDifference), ver bugs.md #45. Devolve um array — UM
-     * ITEM POR PEDAÇO DESCONEXO resultante (usa `PolyTree`, não uma lista solta de `Paths`,
-     * exatamente pra resolver esse agrupamento sem precisar escrever um teste de contenção na
-     * mão) — cada item já é a lista de anéis daquele pedaço (o próprio anel + qualquer furo/ilha
-     * descendente, achatados juntos: a regra par-ímpar do Canvas/rasterizador não precisa saber
-     * qual anel é furo, só processa todos igual).
+     * @description Normaliza toda aresta pra sentido anti-horário (área com sinal positiva,
+     * fórmula do shoelace) e escala pra inteiro — formato que tanto `Clipper` (união/diferença)
+     * quanto `ClipperOffset` (inflar) esperam. Sem essa normalização, anéis vindos de geradores
+     * diferentes (`_traceCellsToRings`, sentido horário por herdar a convenção do traçador de
+     * marching-squares do Renderer, vs. `_shapeToPolygonRings`, sentido anti-horário por amostrar
+     * ângulo crescente) entram com sentidos opostos numa mesma operação — pro Clipper isso cancela
+     * parcialmente a área via número de voltas (`pftNonZero`); pro ClipperOffset é pior, incha pro
+     * lado ERRADO (pode "engolir" a área toda em vez de só crescer a borda um pouco).
      */
-    _clipperBoolean(clipType, subjectRings, clipRings) {
+    _ringsToClipperPaths(rings) {
         const SCALE = FluidSimulationApp.CLIPPER_SCALE;
-        // Normaliza toda aresta pra sentido anti-horário (área com sinal positiva, fórmula do
-        // shoelace) ANTES de escalar pro Clipper. Sem isso, anéis vindos de geradores diferentes
-        // (`_traceCellsToRings`, sentido horário por herdar a convenção do traçador de
-        // marching-squares do Renderer, vs. `_shapeToPolygonRings`, sentido anti-horário por
-        // amostrar ângulo crescente) entravam com sentidos opostos numa mesma união — o número de
-        // voltas (winding number, regra `pftNonZero`) se CANCELAVA parcialmente onde os dois se
-        // sobrepunham, encolhendo o resultado pra uma fração minúscula da área esperada.
         const signedArea = (ring) => {
             let area = 0;
             for (let i = 0; i < ring.length; i++) {
@@ -2128,12 +2411,18 @@ export class FluidSimulationApp {
             }
             return area / 2;
         };
-        const toPath = (ring) => {
-            const normalized = signedArea(ring) < 0 ? [...ring].reverse() : ring;
-            return normalized.map(p => ({ X: Math.round(p.x * SCALE), Y: Math.round(p.y * SCALE) }));
-        };
-        const subj = subjectRings.map(toPath).filter(p => p.length >= 3);
-        const clip = clipRings.map(toPath).filter(p => p.length >= 3);
+        return rings
+            .map(ring => {
+                const normalized = signedArea(ring) < 0 ? [...ring].reverse() : ring;
+                return normalized.map(p => ({ X: Math.round(p.x * SCALE), Y: Math.round(p.y * SCALE) }));
+            })
+            .filter(p => p.length >= 3);
+    }
+
+    _clipperBoolean(clipType, subjectRings, clipRings) {
+        const SCALE = FluidSimulationApp.CLIPPER_SCALE;
+        const subj = this._ringsToClipperPaths(subjectRings);
+        const clip = this._ringsToClipperPaths(clipRings);
         if (subj.length === 0) return [];
         const cpr = new ClipperLib.Clipper();
         cpr.AddPaths(subj, ClipperLib.PolyType.ptSubject, true);
@@ -2152,6 +2441,48 @@ export class FluidSimulationApp {
             results.push(rings);
         }
         return results;
+    }
+
+    /**
+     * @private
+     * @description Infla (expande) um conjunto de anéis por `delta` células, em ponto flutuante,
+     * via `ClipperLib.ClipperOffset` — usado por `_floodFill` só como MARGEM DE SEGURANÇA numérica
+     * antes de subtrair o polígono de uma forma absorvida do anel interior (ver bugs.md #42):
+     * subtrair o polígono exato deixa a borda resultante encostada PIXEL A PIXEL na mesma aresta
+     * que entra de novo na união logo em seguida — dois anéis com uma aresta em comum exata, vindos
+     * de operações booleanas diferentes, deixam o Clipper cuspir frestas capilares de precisão
+     * numérica ali (visível de perto, mesmo sem nenhum degrau de grade envolvido). Inflar uns 0,08
+     * de célula ANTES de subtrair afasta essa borda pra dentro do polígono por uma margem bem menor
+     * que qualquer pixel visível, então a semântica ("nunca deixar o interior reivindicar território
+     * da forma") continua valendo, só sem mais compartilhar aresta EXATA com o polígono da união.
+     */
+    _clipperInflate(rings, delta) {
+        const SCALE = FluidSimulationApp.CLIPPER_SCALE;
+        const out = [];
+        // Um `ClipperOffset.Execute()` por anel, não um só pra todos juntos: `FixOrientations()`
+        // (interno do Clipper) decide se inverte TODOS os anéis de uma leva olhando só pro anel
+        // de vértice mais baixo — pensado pra um grupo "contorno externo + furos" de UMA forma só.
+        // Pra anéis de formas DIFERENTES que só se TOCAM sem relação de furo entre si (ex.: as 3
+        // retas de um triângulo, cada ponta encostando na ponta da vizinha), essa lógica embaralha
+        // o grupo inteiro — reproduzido tentando inflar as 3 retas do triângulo juntas: saíam só 2
+        // anéis (não 3) com áreas erradas (uma bem maior, outra invertida/negativa), formando um
+        // buraco gigante no meio do preenchimento em vez da margem mínima esperada. Cada anel na
+        // sua própria chamada evita esse acoplamento — mais chamadas ao Clipper, mas são poucos
+        // anéis (uma por forma absorvida num preenchimento) e delta é sempre pequeno (bugs.md #42).
+        for (const ring of rings) {
+            const paths = this._ringsToClipperPaths([ring]);
+            if (paths.length === 0) continue;
+            const co = new ClipperLib.ClipperOffset();
+            co.AddPaths(paths, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
+            const solution = new ClipperLib.PolyTree();
+            co.Execute(solution, delta * SCALE);
+            const collect = (node) => {
+                out.push(node.m_polygon.map(p => ({ x: p.X / SCALE, y: p.Y / SCALE })));
+                for (const child of node.Childs()) collect(child);
+            };
+            for (const topNode of solution.Childs()) collect(topNode);
+        }
+        return out;
     }
 
     /**
@@ -2370,26 +2701,74 @@ export class FluidSimulationApp {
         // União via Clipper: o anel traçado da área encontrada pelo BFS + o polígono VERDADEIRO
         // de cada forma absorvida (não só suas células rasterizadas) — dá um contorno
         // geometricamente exato, sem depender de guardar segmentos soltos por fora (bugs.md #45).
-        // `mergedCells` ainda serve de entrada pro traçado do anel-base (o BFS é a ferramenta
-        // certa pra achar "qual é a área fechada", o Clipper entra só na hora de definir o
-        // CONTORNO exato dessa área + das formas que ela engoliu).
         const mergedCells = new Map();
         for (const { x, y } of interiorCells) mergedCells.set(`${x},${y}`, { x, y });
         const absorbedRings = [];
+        const lineRingsForTrim = [];
         for (const shape of absorbed) {
-            this._replayShapeGeometry(shape, (x, y) => mergedCells.set(`${x},${y}`, { x, y }));
-            absorbedRings.push(...this._shapeToPolygonRings(shape));
+            const shapeRings = this._shapeToPolygonRings(shape);
+            absorbedRings.push(...shapeRings);
+            if (shape.tool === 'line') {
+                // 'line' entra no anel-base só via polígono, nunca via célula bruta — ver o motivo
+                // logo abaixo (`lineRingsForTrim`/bugs.md #42).
+                lineRingsForTrim.push(...shapeRings);
+            } else {
+                // Toda forma NÃO-'line' (region/elipse/retângulo arredondado) continua entrando no
+                // anel-base pela própria rasterização (`_replayShapeGeometry`), igual sempre foi:
+                // pra essas, `_shapeToPolygonRings` devolve o disco/área SÓLIDA da forma inteira
+                // (não só uma casca fina — ver comentário de 'ellipse_outline' ali), do mesmo
+                // tamanho do interior que o BFS já encontrou por dentro dela. Subtrair esse
+                // polígono do interior (como se faz abaixo só pra 'line') apagaria a área quase
+                // inteira em vez de só uma borda fina — reproduzido isolado: preencher uma elipse
+                // vazia sumia com o preenchimento inteiro.
+                this._replayShapeGeometry(shape, (x, y) => mergedCells.set(`${x},${y}`, { x, y }));
+            }
             if (shape.cellType === FluidSolver.CELL_TYPE.SOURCE) {
                 const centroid = { x: (shape.x0 + shape.x1) / 2, y: (shape.y0 + shape.y1) / 2 };
                 const groupIdx = this._findSourceGroupNear(centroid);
                 if (groupIdx >= 0) this.solver.sourceGroups.splice(groupIdx, 1);
             }
         }
-        const baseRings = this._traceCellsToRings(Array.from(mergedCells.values()));
-        // Normalmente sai 1 pedaço só (a área do BFS é conectada por definição, e as formas
-        // absorvidas tocam essa borda) — mas itera por segurança/corretude caso o Clipper ache
-        // mais de um (não deveria silenciar dado se acontecer).
-        const pieces = this._clipperBoolean(ClipperLib.ClipType.ctUnion, [...baseRings, ...absorbedRings], []);
+        // Anel-base: as células interiores + as de forma NÃO-'line' absorvida (`mergedCells`,
+        // igual sempre foi), com a área de cada forma 'line' absorvida SUBTRAÍDA (ctDifference)
+        // antes de entrar na união final. `_replayShapeGeometry`/`_drawLineOnGrid` rasteriza uma
+        // linha com só 1 célula de largura (Bresenham, ignora `lineWidth` de propósito — é usado
+        // pra física/cellType, não pra geometria visual), então incluir essa célula bruta no
+        // traçado do anel-base deixa passar até ~1 célula do lado de fora da linha matemática
+        // verdadeira, nos trechos onde o degrau do Bresenham "morde" mais fundo o interior do que
+        // o meio-fio do polígono espesso (`lineWidth`) alcança cobrir — e esse degrau vaza no
+        // contorno final da união (bugs.md #42 — voltou depois do Clipper.js do #45, que nunca
+        // tinha mexido nessa mistura célula-bruta + polígono pra 'line', só na geometria booleana
+        // em si). Subtrair o polígono exato de cada 'line' absorvida do anel interior ANTES da
+        // união garante que o interior nunca reivindica território que já pertence à linha — o
+        // contorno final ali fica 100% definido pelo polígono liso. `_clipperInflate(…, 0.08)`
+        // antes de subtrair é só uma margem de segurança numérica: subtrair o polígono EXATO
+        // deixa a borda resultante encostada pixel a pixel na mesma aresta que entra de novo na
+        // união logo abaixo, e dois anéis com aresta em comum EXATA, vindos de operações
+        // diferentes, fazem o Clipper cuspir frestas capilares de precisão ali — afastar por essa
+        // margem mínima evita isso sem ficar visível em nenhum zoom razoável.
+        const baseRingsRaw = this._traceCellsToRings(Array.from(mergedCells.values()));
+        const baseRings = lineRingsForTrim.length > 0
+            ? this._clipperBoolean(ClipperLib.ClipType.ctDifference, baseRingsRaw, this._clipperInflate(lineRingsForTrim, 0.08)).flat()
+            : baseRingsRaw;
+        // União INCREMENTAL, um anel de cada vez — não `ctUnion([...baseRings, ...absorbedRings])`
+        // de uma vez com tudo junto. Formas absorvidas do tipo 'line' se TOCAM exatamente na ponta
+        // uma da outra (vértices compartilhados do contorno original, pontas quadradas sem
+        // meia-junta — ver `_shapeToPolygonRings`), e o Clipper embaralha essa configuração
+        // quase-degenerada quando processa vários anéis nesse tipo de contato de uma vez só: em
+        // vez de um polígono simples, a árvore de resultado saía com um "buraco" espúrio no meio
+        // (reproduzido e confirmado: um triângulo de 3 linhas gerava 3 anéis aninhados
+        // positivo/negativo/positivo em vez de 1 anel só, visível como uma fresta fina em forma de
+        // triângulo por cima do preenchimento). Unir um anel de cada vez evita expor o Clipper a
+        // essa configuração de uma vez só. Não deveria sobrar mais de 1 pedaço no final (a área do
+        // BFS é conectada por definição, e as formas absorvidas tocam essa borda), mas o `ctUnion`
+        // final sem clip continua ali por segurança/corretude — não deveria silenciar dado se
+        // acontecer.
+        let accRings = baseRings;
+        for (const ring of absorbedRings) {
+            accRings = this._clipperBoolean(ClipperLib.ClipType.ctUnion, accRings, [ring]).flat();
+        }
+        const pieces = this._clipperBoolean(ClipperLib.ClipType.ctUnion, accRings, []);
 
         for (const rings of pieces) {
             const shape = this._buildRegionFromRings(activeCellType, rings);
@@ -2400,13 +2779,15 @@ export class FluidSimulationApp {
                 const absCells = shape.cells.map(c => ({ x: shape.x0 + c.dx, y: shape.y0 + c.dy }));
                 this.solver.addSourceGroup(absCells, shape.vx, shape.vy);
             } else if (activeCellType === FluidSolver.CELL_TYPE.ROTOR) {
-                shape.massMultiplier = this.rotorDefaults.massMultiplier;
-                shape.damping = this.rotorDefaults.damping;
-                shape.stiffness = this.rotorDefaults.stiffness;
+                Object.assign(shape, this._rotorPropsFrom(this.rotorDefaults));
                 const absCells = shape.cells.map(c => ({ x: shape.x0 + c.dx, y: shape.y0 + c.dy }));
-                this.solver.addRotatingBody(absCells, null, { ...this.rotorDefaults });
+                this.solver.addRotatingBody(absCells, null, this._rotorPropsFrom(this.rotorDefaults));
             } else if (activeCellType === FluidSolver.CELL_TYPE.VALVE) {
                 shape.enabled = false;
+            } else if (activeCellType === FluidSolver.CELL_TYPE.MESH) {
+                shape.holeSize = FluidSolver.MESH_DEFAULT_HOLE_SIZE;
+            } else if (activeCellType === FluidSolver.CELL_TYPE.SINK) {
+                shape.suction = FluidSolver.SINK_DEFAULT_SUCTION;
             }
             this.shapes.push(shape);
         }
@@ -2570,10 +2951,28 @@ export class FluidSimulationApp {
                 if (x < 0 || x >= xdim || y < 0 || y >= ydim) return;
                 const i = x + y * xdim;
                 this.solver.cellType[i] = effectiveType;
-                this.lineCellMask[i] = isLine ? 1 : 0;
+                // Grade sempre entra na máscara, não só quando desenhada com a ferramenta Linha
+                // (bugs.md #32): o visual dela é o overlay vetorial translúcido cobrindo a cor
+                // do escoamento por baixo (ver Renderer.drawSmoothLineShapes) — sem mascarar
+                // aqui, uma Grade retangular/elíptica mostraria um bloco cinza SÓLIDO por baixo
+                // do overlay translúcido (as duas camadas juntas somam de volta pra opaco), em
+                // vez do efeito "tela translúcida deixando ver o vento resistido atrás dela".
+                this.lineCellMask[i] = (isLine || effectiveType === FluidSolver.CELL_TYPE.MESH) ? 1 : 0;
                 if (effectiveType === FluidSolver.CELL_TYPE.SOURCE) {
                     this.solver.sourceVx[i] = shape.vx;
                     this.solver.sourceVy[i] = shape.vy;
+                } else if (effectiveType === FluidSolver.CELL_TYPE.MESH) {
+                    // Furo por célula (bugs.md #32) — mesmo padrão de sourceVx/vy: a "verdade"
+                    // do parâmetro mora em `shape.holeSize`, espelhada pro array por célula do
+                    // solver toda vez que a grade é rasterizada.
+                    this.solver.meshHoleSize[i] = shape.holeSize ?? FluidSolver.MESH_DEFAULT_HOLE_SIZE;
+                } else if (effectiveType === FluidSolver.CELL_TYPE.SINK) {
+                    // Sucção por célula (bugs.md #52) — mesmo padrão de sourceVx/vy e
+                    // meshHoleSize: a "verdade" do parâmetro mora em `shape.suction`, espelhada
+                    // pro array por célula do solver toda vez que a grade é rasterizada. Uma
+                    // Saída fechada vira BARRIER (effectiveType já não é SINK aqui), então não
+                    // passa por este ramo — não precisa zerar sucção nesse caso.
+                    this.solver.sinkStrength[i] = shape.suction ?? FluidSolver.SINK_DEFAULT_SUCTION;
                 }
             });
         }
@@ -2603,16 +3002,19 @@ export class FluidSimulationApp {
         // vence por cima da pintura livre/outras formas, igual já valia pra undo/redo e
         // importar configuração.
         this.solver.stampRotatingBodiesOntoGrid();
-        this.solver.invalidateSinkDamping();
         this._refreshValveWidget();
     }
 
     /**
      * @private
-     * @description Reconstrói a barra de válvulas (canto inferior esquerdo) a partir de
-     * `shapes[]` — um interruptor por Entrada/Saída/Válvula na cena, pra abrir/fechar o fluxo
-     * sem precisar selecionar a forma. Fica escondida se não houver nenhuma dessas três ainda.
-     * Chamada sempre que `_rasterizeShapes()` roda (o chokepoint de "shapes[] mudou").
+     * @description Reconstrói o painel de controle (faixa própria abaixo do canvas, bugs.md
+     * #50 — substituiu a barra flutuante do #31, que sobrepunha o canvas) a partir de
+     * `shapes[]`: um "módulo" por Entrada/Saída/Válvula na cena, com indicador luminoso e
+     * interruptor tipo bascule pra abrir/fechar o fluxo sem precisar selecionar a forma; a
+     * Entrada ganha também um controle de velocidade inline, item explícito do pedido original
+     * ("para entrada poderiamos ter como ajustar a velocidade tb"). Fica escondido se não
+     * houver nenhuma das três ainda. Chamada sempre que `_rasterizeShapes()` roda (o chokepoint
+     * de "shapes[] mudou").
      */
     _refreshValveWidget() {
         if (!this.valveControlsWidget) return;
@@ -2635,29 +3037,95 @@ export class FluidSimulationApp {
             const isOpen = isValveShape ? shape.enabled === true : shape.enabled !== false;
             const typeName = isSource ? 'Entrada' : isSink ? 'Saída' : 'Válvula';
 
-            const chip = document.createElement('label');
-            chip.className = 'valve-chip' + (isOpen ? '' : ' closed');
-            chip.title = `${typeName} ${label} — ${isOpen ? 'aberta' : 'fechada'}`;
+            const unit = document.createElement('div');
+            unit.className = 'control-unit' + (isOpen ? ' open' : '');
+            unit.title = `${typeName} ${label} — ${isOpen ? 'aberta' : 'fechada'}`;
 
-            const icon = document.createElement('i');
-            icon.className = isSource ? 'fa-solid fa-arrow-right-to-bracket' : isSink ? 'fa-solid fa-arrow-right-from-bracket' : (isOpen ? 'fa-solid fa-door-open' : 'fa-solid fa-door-closed');
+            const labelRow = document.createElement('div');
+            labelRow.className = 'control-unit-label';
+            const led = document.createElement('span');
+            led.className = 'control-unit-led';
+            labelRow.appendChild(led);
+            labelRow.appendChild(document.createTextNode(label));
+            unit.appendChild(labelRow);
 
             const input = document.createElement('input');
             input.type = 'checkbox';
-            input.setAttribute('role', 'switch');
+            input.className = 'control-unit-switch';
+            input.setAttribute('aria-label', `${typeName} ${label}`);
             input.checked = isOpen;
             input.addEventListener('change', () => {
                 this._saveState();
                 shape.enabled = input.checked;
+                unit.classList.toggle('open', input.checked);
+                unit.title = `${typeName} ${label} — ${input.checked ? 'aberta' : 'fechada'}`;
                 this._rasterizeShapes();
                 this._markDirty();
                 this._requestPaint();
             });
+            unit.appendChild(input);
 
-            chip.appendChild(icon);
-            chip.appendChild(document.createTextNode(' ' + label + ' '));
-            chip.appendChild(input);
-            this.valveControlsWidget.appendChild(chip);
+            // Ajuste de velocidade inline, só na Entrada (bugs.md #50) — mesmo range/lógica do
+            // slider "Velocidade do Fluxo" global, mas por Entrada individual, preservando o
+            // ângulo já escolhido (arrastando a seta ou pelo painel flutuante).
+            if (isSource) {
+                const row = document.createElement('div');
+                row.className = 'control-unit-speed';
+                const speedInput = document.createElement('input');
+                speedInput.type = 'range';
+                speedInput.min = '0';
+                speedInput.max = String(FluidSimulationApp.MAX_SOURCE_SPEED);
+                speedInput.step = '0.005';
+                const currentSpeed = Math.hypot(shape.vx, shape.vy);
+                speedInput.value = String(currentSpeed);
+                const valueLabel = document.createElement('span');
+                valueLabel.textContent = currentSpeed.toFixed(2);
+                speedInput.addEventListener('input', () => {
+                    const speed = Number(speedInput.value);
+                    valueLabel.textContent = speed.toFixed(2);
+                    const angle = Math.atan2(shape.vy, shape.vx) || 0;
+                    this._setSourceVelocity(shape, speed * Math.cos(angle), speed * Math.sin(angle));
+                    if (this.selectedShapeIndex >= 0 && this.shapes[this.selectedShapeIndex] === shape) {
+                        this._updateFloatingPanel();
+                    }
+                    this._markDirty();
+                    this._requestPaint();
+                });
+                row.appendChild(speedInput);
+                row.appendChild(valueLabel);
+                unit.appendChild(row);
+            }
+
+            // Ajuste de força de sucção inline, só na Saída (bugs.md #52) — mesmo padrão do
+            // slider de velocidade da Entrada logo acima: fica dentro do próprio módulo, sem
+            // precisar selecionar a forma. Escala as 9 distribuições da célula por passo (ver
+            // FluidSolver._applySourcesAndSinks); 0 volta ao comportamento antigo (dreno
+            // puramente visual, sem sucção nenhuma).
+            if (isSink) {
+                const row = document.createElement('div');
+                row.className = 'control-unit-speed';
+                const suctionInput = document.createElement('input');
+                suctionInput.type = 'range';
+                suctionInput.min = '0';
+                suctionInput.max = String(FluidSolver.SINK_MAX_SUCTION);
+                suctionInput.step = '0.002';
+                const currentSuction = shape.suction ?? FluidSolver.SINK_DEFAULT_SUCTION;
+                suctionInput.value = String(currentSuction);
+                const valueLabel = document.createElement('span');
+                valueLabel.textContent = currentSuction.toFixed(3);
+                suctionInput.addEventListener('input', () => {
+                    const suction = Number(suctionInput.value);
+                    valueLabel.textContent = suction.toFixed(3);
+                    this._setSinkSuction(shape, suction);
+                    this._markDirty();
+                    this._requestPaint();
+                });
+                row.appendChild(suctionInput);
+                row.appendChild(valueLabel);
+                unit.appendChild(row);
+            }
+
+            this.valveControlsWidget.appendChild(unit);
         }
     }
 
@@ -2816,6 +3284,14 @@ export class FluidSimulationApp {
                         this.solver.addSourceGroup(absCells, shape.vx, shape.vy);
                     } else if (shape.cellType === FluidSolver.CELL_TYPE.VALVE) {
                         newShape.enabled = shape.enabled;
+                    } else if (shape.cellType === FluidSolver.CELL_TYPE.MESH) {
+                        newShape.holeSize = shape.holeSize;
+                    } else if (shape.cellType === FluidSolver.CELL_TYPE.SINK) {
+                        // Preserva estado aberto/fechado e força de sucção do pedaço original —
+                        // sem isto, cortar uma Saída com curva (elipse/arredondado/region) via
+                        // Borracha reabriria uma Saída fechada e voltaria a sucção pro padrão.
+                        newShape.enabled = shape.enabled;
+                        newShape.suction = shape.suction;
                     }
                     survivingShapes.push(newShape);
                 }
@@ -2849,6 +3325,15 @@ export class FluidSimulationApp {
         }
         this._rasterizeShapes();
         this.solver.dyeSources = this.solver.dyeSources.filter(source => source.x < x_start || source.x > x_end || source.y < y_start || source.y > y_end);
+        // Objetos avulsos (bugs.md #32) não têm fonte — apagar a área embaixo de um deles
+        // desativa a partícula em si (mesmo pool, ver `addParticle`), não uma "fonte" que não
+        // existe mais.
+        for (const p of this.solver.particles) {
+            if (p.x >= x_start && p.x <= x_end && p.y >= y_start && p.y <= y_end) {
+                p.x = -1;
+                p.y = -1;
+            }
+        }
     }
 
     /**
@@ -2996,6 +3481,7 @@ export class FluidSimulationApp {
     initFluid() {
         this.solver.initFluid(this.solver.boundaryMode === 'open' ? 0 : Number(this.speedSlider.value));
         this.solver.initDyeTracers();
+        this.solver.initParticles();
         // Campo de escoamento voltou ao repouso "de fábrica" — o canvas volta a ficar neutro até
         // rodar de novo (initFluid é o ponto único chamado por reset/limpar/importar/desfazer/
         // trocar modo/etc., então não precisa repetir isso em cada chamador).
@@ -3032,8 +3518,8 @@ export class FluidSimulationApp {
         this.rawCellType.fill(FluidSolver.CELL_TYPE.NORMAL);
         this.shapes = [];
         this.solver.cellType.fill(FluidSolver.CELL_TYPE.NORMAL);
-        this.solver.invalidateSinkDamping();
         this.solver.dyeSources = [];
+        this.solver.initParticles(); // objetos avulsos somem junto (bugs.md #32, sem fonte)
         this.solver.rotatingBodies = [];
         this.solver.sourceGroups = [];
         this.selectedRotorIndex = -1;
@@ -3223,6 +3709,128 @@ export class FluidSimulationApp {
             html: ` <p>A velocidade na simulação (<strong>${u0.toFixed(3)}</strong>) é um valor adimensional. Para correlacioná-la com o mundo real, precisamos fazer algumas suposições sobre a escala.</p> <table> <thead><tr><th>Velocidade Atual (Aprox.)</th></tr></thead> <tbody> <tr><td><strong>${speed_ms.toFixed(1)} m/s</strong></td></tr> <tr><td><strong>${speed_kmh.toFixed(1)} km/h</strong></td></tr> </tbody> </table> <div class="note"> <strong>Nota sobre a escala:</strong> Esta conversão assume que um objeto como o aerofólio (com ~40 células de largura) mede 1 metro na vida real, e que o fator de escala temporal da simulação resulta em uma multiplicação por ${speed_scaling_factor}. Altere este fator no código para ajustar a calibração para diferentes cenários. </div>`
         });
     }
+    /**
+     * @private
+     * @description Sincroniza os campos de tamanho da grade com as dimensões que a simulação
+     * REALMENTE tem agora — chamado depois de qualquer coisa que recrie a grade (novo cenário,
+     * importar configuração, restaurar auto-save), para os campos nunca mostrarem um tamanho que
+     * não é o da cena na tela.
+     */
+    _syncGridSizeInputs() {
+        if (!this.gridWidthInput || !this.solver) return;
+        this.gridWidthInput.value = this.solver.xdim;
+        this.gridHeightInput.value = this.solver.ydim;
+        this._updateGridSizeHint();
+    }
+
+    /**
+     * @private
+     * @description Atualiza a linha de dica embaixo dos campos: quanto a grade digitada tem de
+     * células e, quando for grande o bastante para pesar, um aviso. Mostra também o tamanho
+     * atual quando o valor digitado ainda não foi aplicado, para ficar claro que o campo é uma
+     * intenção, não o estado da simulação.
+     */
+    _updateGridSizeHint() {
+        if (!this.gridSizeHint || !this.solver) return;
+        const w = Number(this.gridWidthInput.value);
+        const h = Number(this.gridHeightInput.value);
+        const atual = `Atual: ${this.solver.xdim} × ${this.solver.ydim}`;
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+            this.gridSizeHint.textContent = atual;
+            this.gridSizeHint.classList.remove('is-heavy');
+            return;
+        }
+        // Valor fora dos limites não vira contagem de células: dizer "38 milhões de células — vai
+        // rodar lento" para um tamanho que o Aplicar vai recusar de qualquer jeito é pior que não
+        // dizer nada, porque descreve como lento algo que é impossível.
+        const MIN = FluidSimulationApp.GRID_MIN_DIM,
+            MAX = FluidSimulationApp.GRID_MAX_DIM;
+        if (w < MIN || h < MIN || w > MAX || h > MAX) {
+            this.gridSizeHint.textContent = `Cada lado precisa estar entre ${MIN} e ${MAX} · ${atual.toLowerCase()}`;
+            this.gridSizeHint.classList.add('is-heavy');
+            return;
+        }
+        const area = Math.round(w) * Math.round(h);
+        const pendente = Math.round(w) !== this.solver.xdim || Math.round(h) !== this.solver.ydim;
+        const celulas = area >= 1000 ? `${(area / 1000).toFixed(0)} mil células` : `${area} células`;
+        const pesada = area > FluidSimulationApp.GRID_HEAVY_AREA;
+        this.gridSizeHint.textContent = pendente
+            ? `${celulas}${pesada ? ' — vai rodar lento' : ''} · ${atual.toLowerCase()}`
+            : `${atual} (${celulas})`;
+        this.gridSizeHint.classList.toggle('is-heavy', pendente && pesada);
+    }
+
+    /**
+     * @private
+     * @description Aplica um novo tamanho de grade (bugs.md #49). Recriar a grade recria todos
+     * os arrays do solver, então a cena inteira (formas, rotores, fumaça, desfazer/refazer) vai
+     * junto — daí a confirmação, no mesmo padrão do "Limpar tudo".
+     */
+    async _applyGridSize() {
+        const MIN = FluidSimulationApp.GRID_MIN_DIM,
+            MAX = FluidSimulationApp.GRID_MAX_DIM;
+        const w = Math.round(Number(this.gridWidthInput.value));
+        const h = Math.round(Number(this.gridHeightInput.value));
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w < MIN || h < MIN || w > MAX || h > MAX) {
+            Swal.fire({
+                title: 'Tamanho inválido',
+                text: `Cada lado da grade precisa estar entre ${MIN} e ${MAX} células.`,
+                icon: 'error'
+            });
+            this._syncGridSizeInputs();
+            return;
+        }
+        const area = w * h;
+        if (area > FluidSimulationApp.GRID_MAX_AREA) {
+            Swal.fire({
+                title: 'Grade grande demais',
+                html: `Uma grade de <strong>${w} × ${h}</strong> tem ${(area / 1000000).toFixed(1)} milhões de células. O limite é ${(FluidSimulationApp.GRID_MAX_AREA / 1000000).toFixed(1)} milhão — acima disso a simulação consome memória demais e trava o navegador em vez de ficar só lenta.`,
+                icon: 'error'
+            });
+            return;
+        }
+        if (w === this.solver.xdim && h === this.solver.ydim) {
+            this._updateGridSizeHint();
+            return;
+        }
+        const pesada = area > FluidSimulationApp.GRID_HEAVY_AREA;
+        const result = await Swal.fire({
+            title: `Mudar a grade para ${w} × ${h}?`,
+            html: `A grade é recriada do zero: <strong>tudo o que está desenhado será apagado</strong> (barreiras, entradas, saídas, rotores e fumaça), e o histórico de desfazer também. Esta ação não pode ser desfeita.${pesada ? `<br><br><strong>Atenção:</strong> ${(area / 1000).toFixed(0)} mil células é uma grade pesada — a simulação vai rodar bem mais devagar que o normal.` : ''}`,
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fa-solid fa-table-cells"></i> Aplicar tamanho',
+            cancelButtonText: 'Cancelar',
+            confirmButtonColor: '#ff5d5d',
+            reverseButtons: true
+        });
+        if (!result.isConfirmed) {
+            this._syncGridSizeInputs();
+            return;
+        }
+        // Recriar a grade troca o objeto `solver` inteiro; parar o laço antes evita que um passo
+        // já agendado rode em cima do solver antigo logo depois da troca.
+        if (this.running) this.startStop();
+        this._resetSimulation(w, h);
+    }
+
+    _showGridSizeHelp() {
+        const s = this.solver;
+        Swal.fire({
+            title: 'Tamanho da Grade',
+            icon: 'info',
+            html: ` <p>A grade é o "papel quadriculado" onde a física acontece: cada célula é um ponto de cálculo. Hoje sua cena tem <strong>${s.xdim} × ${s.ydim}</strong> células.</p> <ul> <li><strong>Grade maior</strong> = mais espaço e mais detalhe (obstáculos finos e vórtices pequenos aparecem melhor), porém mais lenta — o custo de cada passo é proporcional ao número de células.</li> <li><strong>Grade menor</strong> = roda mais rápido e é melhor para experimentar, com menos detalhe.</li> </ul> <div class="note"> Ao aplicar um tamanho novo a grade é recriada do zero e <strong>o desenho atual é apagado</strong>. Se quiser guardar a cena antes, use Exportar — uma cena importada traz a própria grade junto, independente do tamanho da sua janela. </div>`
+        });
+    }
+
+    _showBoundaryModeHelp() {
+        Swal.fire({
+            title: 'Canal ou Mundo Aberto?',
+            icon: 'info',
+            html: ` <p>O modo define o que acontece nas <strong>bordas da grade</strong> — é independente do que você desenha dentro dela.</p> <ul> <li><strong>Canal:</strong> a borda esquerda INTEIRA (de cima a baixo) sopra com a "Velocidade do Fluxo" do painel, a borda direita é saída livre e as bordas de cima/baixo são paredes. É o modo de túnel de vento: existe um vento de fundo mesmo sem nenhuma Entrada desenhada.</li> <li><strong>Mundo Aberto:</strong> as quatro bordas viram saída livre, sem vento de fundo nenhum. Só as <strong>Entradas</strong> que você desenhar movimentam o fluido.</li> </ul> <div class="note"> <strong>Desenhou um duto/canal alimentado por uma Entrada e apareceu ar entrando pela esquerda?</strong> É o vento de fundo do modo Canal se somando à sua Entrada. Troque para <em>Mundo Aberto</em> (ou deixe a Velocidade do Fluxo em 0) para que só a Entrada sopre. </div>`
+        });
+    }
+
     _showVisualizationHelp() {
         Swal.fire({
             title: 'Entendendo as Visualizações',
@@ -3302,7 +3910,10 @@ export class FluidSimulationApp {
      * @private
      * @description Só uma fonte de verdade por vez: guarda `rawCellType` (pintura livre) +
      * `shapes[]` (formas vetoriais), NÃO o `cellType` composto — as duas representações da
-     * mesma informação podem divergir silenciosamente se guardadas juntas.
+     * mesma informação podem divergir silenciosamente se guardadas juntas. `solver.particles`
+     * (objetos avulsos de bugs.md #32) fica de fora de propósito: sem uma "fonte" que os defina,
+     * eles são estado vivo da simulação, não geometria de design — mesmo tratamento que
+     * `dyeTracers`/`tracerX/Y` já recebem (nunca entraram no undo, só as SUAS fontes entravam).
      */
     _snapshotState() {
         return {
@@ -3328,7 +3939,6 @@ export class FluidSimulationApp {
         // a mesma usada na criação/reforma de um Rotor, ver _commitShape/_commitShapeReform.
         this._rasterizeShapes();
         this.solver.stampRotatingBodiesOntoGrid();
-        this.solver.invalidateSinkDamping();
         // O índice de seleção não sobrevive a undo/redo — a lista de corpos/formas pode ter mudado.
         this.selectedRotorIndex = -1;
         this.selectedShapeIndex = -1;
@@ -3463,9 +4073,7 @@ export class FluidSimulationApp {
         // existirem não vai ter massMultiplier/damping/stiffness em cada corpo.
         this.solver.rotatingBodies = (config.rotatingBodies || []).map(body => ({
             ...body,
-            massMultiplier: body.massMultiplier ?? 1,
-            damping: body.damping ?? 0.05,
-            stiffness: body.stiffness ?? 0
+            ...this._rotorPropsFrom(body)
         }));
         // Arquivos de antes dos grupos de Entrada existirem não vão ter isso — fica vazio, a
         // Entrada em si (sourceVx/sourceVy) continua funcionando normalmente, só não vem
@@ -3473,13 +4081,13 @@ export class FluidSimulationApp {
         this.solver.sourceGroups = config.sourceGroups || [];
         this._rasterizeShapes();
         this.solver.stampRotatingBodiesOntoGrid();
-        this.solver.invalidateSinkDamping();
         this.selectedRotorIndex = -1;
         this.selectedShapeIndex = -1;
         this.editingSourceGroupIndex = -1;
         this.initFluid();
         this.solver.initTracers(this.tracerCheck.checked);
         this.solver.initDyeTracers();
+        this.solver.initParticles();
         this._refreshAllSliderFills();
         this._updateFloatingPanel();
         // Restaura zoom/pan por cima do auto-fit que _resetSimulation já fez — arquivos de

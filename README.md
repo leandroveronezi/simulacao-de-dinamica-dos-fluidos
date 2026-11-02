@@ -28,6 +28,8 @@
 - [Objetos Giratórios (Rotores)](#-objetos-giratórios-rotores)
 - [Grupos de Entrada (Sources)](#-grupos-de-entrada-sources)
 - [Sistema de Saída (Sink)](#-sistema-de-saída-sink)
+- [Grade (Barreira Permeável)](#-grade-barreira-permeável)
+- [Partículas Físicas](#-partículas-físicas)
 - [Import / Export de Configuração](#-import--export-de-configuração)
 - [Atalhos de Teclado](#-atalhos-de-teclado)
 - [Parâmetros de Simulação](#-parâmetros-de-simulação)
@@ -51,18 +53,23 @@ Ao contrário dos métodos de diferenças finitas ou elementos finitos que discr
 
 | Recurso | Descrição |
 |---|---|
-| 🖌️ **12 ferramentas de desenho** | Pincel, linha, retângulo, elipse, contorno, arredondado, preenchimento (flood-fill), spray, borracha, fumaça, seleção, pan |
-| 🔲 **4 tipos de célula** | Barreira, Entrada (Source), Saída (Sink), Rotor |
-| 🌀 **Rotores físicos** | Turbinas e palhetas elásticas com inércia, amortecimento e mola de retorno individuais |
+| 🖌️ **Ferramentas de desenho** | Pincel, linha, retângulo, elipse, contorno, arredondado, preenchimento (flood-fill), borracha retangular, borracha em traço livre, fumaça, partículas físicas, seleção, pan |
+| 🔲 **6 tipos de célula** | Barreira, Entrada (Source), Saída (Sink), Rotor, Válvula, Grade (permeável) |
+| 🌀 **Rotores físicos** | Turbinas e palhetas elásticas com inércia, amortecimento e mola de retorno individuais — e um modo **Motor** de 3 estágios (anti-horário/desligado/horário) que move o fluido sozinho |
+| 🎈 **Partículas físicas** | Folhas, bolinhas e caixas com peso ajustável — seguem o vento, sofrem gravidade e quicam ao bater numa parede |
+| 🕸️ **Grade (barreira permeável)** | Freia o vento sem bloquear (vento/fumaça/traçadores sempre atravessam); bloqueia só partículas maiores que o furo ajustável |
+| 🚪 **Válvula** | Terceiro tipo de passagem, ao lado de Entrada/Saída — nasce fechada, abre/fecha pelo painel de controle |
 | 💡 **5 modos de visualização** | Densidade (pressão), Vel. X, Vel. Y, Velocidade (módulo), Rotação/Curl |
 | 🎨 **Corante (Smoke)** | Traçadores de fumaça coloridos emitidos a partir de fontes definidas pelo usuário |
 | 📐 **Zoom & Pan** | Zoom de 1× até 8× com ancoragem no cursor; pan livre; botões +/−/reset |
 | ↩️ **Undo / Redo** | Pilha ilimitada com snapshot completo da geometria (Ctrl+Z / Ctrl+Y) |
 | 📋 **Seleção & Clipboard** | Copiar, recortar, colar, inverter horizontal/vertical, rotacionar 90°/180°/270° |
-| 💾 **Import / Export** | Configuração completa serializada em JSON (versão 16) |
+| 💾 **Import / Export** | Configuração completa serializada em JSON (versão 17) |
 | 📷 **Screenshot** | Exporta o canvas como PNG com timestamp |
 | 📡 **Sensor** | Leitura ao vivo de ρ, ux, uy em qualquer ponto da grade (arrastável) |
 | 🔧 **Modo Canal / Mundo Aberto** | Muda o regime de contorno sem apagar a geometria desenhada |
+| 📏 **Tamanho de grade ajustável** | Campos de largura/altura no painel Simulação — a cena é recriada do zero no tamanho escolhido |
+| 🎛️ **Painel de controle** | Faixa própria abaixo do canvas com um interruptor tipo bascule por Entrada/Saída/Válvula, e ajuste de velocidade inline na Entrada |
 
 ---
 
@@ -151,11 +158,12 @@ O código é estruturado em três módulos ES com responsabilidades bem separada
 │               FluidSimulationApp.js                             │
 │  • Controlador principal da aplicação                           │
 │  • DOM: queries, event listeners, sliders, modais (SweetAlert2) │
-│  • Ferramentas: brush, line, rect, ellipse, fill, spray, smoke  │
+│  • Ferramentas: brush, line, rect, ellipse, fill, smoke,        │
+│    partículas, borracha (retângulo + traço livre)               │
 │  • Transformações de seleção: flip, rotate, cut/copy/paste      │
 │  • Undo/Redo: pilha de snapshots completos da geometria         │
 │  • Zoom/Pan: transformações de viewport com âncora no cursor    │
-│  • Import/Export: JSON v16 completo                             │
+│  • Import/Export: JSON v17 completo                             │
 │  • Loop de animação: requestAnimationFrame + setTimeout ~60 FPS │
 └────────────┬────────────────────────────────┬───────────────────┘
              │ orquestra                       │ orquestra
@@ -166,9 +174,10 @@ O código é estruturado em três módulos ES com responsabilidades bem separada
 │  • LBM D2Q9 completo  │         │  • ImageData offscreen  │
 │  • collide() BGK      │         │  • Colormap 400 tons    │
 │  • stream()           │         │  • Réguas e grid        │
-│  • Rotores + torque   │         │  • Traçadores de fluxo  │
-│  • Sources/Sinks      │         │  • Fumaça (dye tracers) │
-│  • Traçadores         │         │  • Setas força/Entrada  │
+│  • Rotores + motor    │         │  • Traçadores de fluxo  │
+│  • Sources/Sinks/Mesh │         │  • Fumaça (dye tracers) │
+│  • Traçadores         │         │  • Partículas físicas   │
+│  • Partículas físicas │         │  • Setas força/Entrada  │
 │  • Estabilidade       │         │  • Sensor ao vivo       │
 └───────────────────────┘         └─────────────────────────┘
 ```
@@ -190,8 +199,10 @@ O código é estruturado em três módulos ES com responsabilidades bem separada
 | **Normal** | `0` | Campo de escoamento | Fluido livre — evolui pelo LBM completo |
 | **Barreira** | `1` | ⬛ Preto | Sólido fixo — bounce-back sem deslizamento |
 | **Entrada (Source)** | `2` | 🔵 Azul-céu | Impõe velocidade e densidade a cada passo |
-| **Saída (Sink)** | `3` | 🔴 Vermelho | Absorve fluido via rampa de pressão gradual |
-| **Rotor** | `4` | 🟣 Violeta | Sólido giratório com física de corpo rígido |
+| **Saída (Sink)** | `3` | 🔴 Vermelho | Drena massa a cada passo (força ajustável) — ralo de verdade; também absorve traçadores/fumaça/partículas ao toque |
+| **Rotor** | `4` | 🟣 Violeta | Sólido giratório com física de corpo rígido; opcionalmente também um motor |
+| **Válvula** | `5` | 🟢 Verde | Nasce fechada (bounce-back, como Barreira); aberta vira passagem transparente |
+| **Grade** | `6` | ⬜ Cinza translúcido | Nunca bloqueia o fluido — freia a velocidade célula a célula; bloqueia só partículas maiores que o furo |
 
 ---
 
@@ -208,16 +219,18 @@ O código é estruturado em três módulos ES com responsabilidades bem separada
 | **Retângulo Contorno** | Apenas as bordas do retângulo |
 | **Elipse Contorno** | Apenas a borda da elipse (banda de 0.2 de largura normalizada) |
 | **Retângulo Arredondado** | Bordas com raio = 20% do menor lado; ângulos via arcos trigonométricos |
-| **Preenchimento (Flood-Fill)** | BFS a partir do ponto clicado; limite de 10.000 iterações de segurança |
-| **Spray** | Distribuição aleatória em raio configurável (2–50 células) |
-| **Borracha Retangular** | Apaga um retângulo de células para o tipo Normal |
+| **Preenchimento (Flood-Fill)** | BFS a partir do ponto clicado; funde contornos fechados numa forma vetorial só; limite de 10.000 iterações de segurança |
+| **Borracha Retangular** | Apaga um retângulo de células; corta formas vetoriais de verdade (a parte coberta vira fundo, o resto continua) |
+| **Borracha em Traço Livre** | Mesmo corte, mas seguindo o cursor célula a célula (funciona na diagonal) |
 
 ### Ferramentas Especiais
 
 | Ferramenta | Comportamento |
 |---|---|
 | **Fumaça / Corante** | Registra ponto de emissão de traçadores de fumaça (até 4.000 partículas) |
+| **Partículas** | Cada clique solta UM objeto avulso — Folha/Bolinha/Caixa, com peso ajustável (até 300 simultâneos) — sem fonte contínua |
 | **Seleção** | Define área retangular para copiar/recortar/transformar |
+| **Ponteiro** | Seleciona e edita formas/Rotor/Entrada/fontes de Fumaça já desenhadas (partículas físicas são avulsas, sem forma pra selecionar depois) |
 | **Pan** | Navega pelo canvas arrastando; também ativado pela roda do mouse |
 
 ---
@@ -226,11 +239,13 @@ O código é estruturado em três módulos ES com responsabilidades bem separada
 
 ### Canal (`channel` — padrão)
 
-- **Borda esquerda**: entrada com velocidade `u0` constante
+- **Borda esquerda**: entrada com velocidade `u0` constante — a borda INTEIRA, de cima a baixo, mesmo sem nenhuma Entrada desenhada
 - **Borda direita**: saída de gradiente zero (copia distribuições da penúltima coluna)
 - **Bordas superior/inferior**: paredes com **deslizamento livre** — reflete apenas a componente normal Y, preservando X
 
 > Ideal para simular escoamento em torno de obstáculos: perfil de asa (aerofólio), cilindros, canais com estreitamentos.
+
+> ⚠️ Se você desenhou um duto/canal alimentado só por uma célula **Entrada**, o vento de fundo do modo Canal se soma a ela — pode parecer que "ar está vindo de algum lugar que você não desenhou". Para que só as Entradas movimentem o fluido, use **Mundo Aberto** (ou zere a Velocidade do Fluxo).
 
 ### Mundo Aberto (`open`)
 
@@ -271,21 +286,29 @@ Rotores são corpos rígidos 2D que **giram sob o torque do fluido** e, por sua 
 
 | Propriedade | Intervalo | Descrição |
 |---|---|---|
-| **Massa/Densidade** | 0.2 – 5.0 | Multiplica o momento de inércia calculado pela forma |
+| **Massa/Densidade** | 0.2 – 5.0 | Multiplica o momento de inércia calculado pela forma — controla a inércia (rapidez pra acelerar/desacelerar), não mais a velocidade final em regime |
 | **Amortecimento Angular** | 0 – 0.2 | Fração de velocidade angular perdida por passo (atrito viscoso) |
 | **Rigidez da Mola** | 0 – 0.05 | `0` = turbina livre; `> 0` = palheta elástica (balança e volta ao ângulo de repouso) |
+| **Motor** | 3 estágios | Anti-horário / desligado / horário — liga um controle de velocidade que faz o Rotor mover o fluido sozinho, mesmo sem nenhuma Entrada |
+| **Velocidade do Motor** | 5% – 100% | Fração da rotação máxima que o motor persegue (só visível com o motor ligado) |
 
 ### Equação de Movimento
 
+O Rotor "sopra" o fluido adjacente via uma correção de parede em movimento (ver seção de fundamentos físicos) — e essa mesma injeção de momento gera uma reação de arrasto sobre o próprio corpo, proporcional a `ω`. Sem cobrar essa reação, o Rotor criaria momento do próprio nada e disparava sozinho até o teto de velocidade; o termo `−C·ω` abaixo é o que fecha esse balanço:
+
 ```
-I_eff · Δω = τ_fluido − β · ω − k · (θ − θ_repouso)
+I_eff · Δω = τ_fluido_filtrado − C·ω − β·ω − k·(θ − θ_repouso) + motor
 
 onde:
-  I_eff     = massMultiplier × Σ(dx² + dy²)      [momento de inércia]
-  τ_fluido  = Σ_células [ r × F_bounce-back ]     [torque do fluido]
-  β         = damping                              [amortecimento]
-  k         = stiffness                            [rigidez da mola]
+  I_eff     = massMultiplier × Σ(dx² + dy²)          [momento de inércia]
+  τ_fluido  = Σ_células [ r × F_bounce-back ]         [torque medido no bounce-back, ANTES da injeção]
+  C         = Σ_células [ 2·ρ·r² ]                    [arrasto de reação à própria injeção de parede]
+  β         = damping                                  [amortecimento do usuário]
+  k         = stiffness                                [rigidez da mola]
+  motor     = ganho·(ω_alvo − ω), só com o Motor ligado [controle de velocidade]
 ```
+
+O termo de arrasto `C·ω` e o termo do motor entram de forma **implícita** na integração (no denominador, não somados ao torque) — um esquema explícito instabiliza para corpos leves, invertendo o sinal de `ω` a cada passo em vez de amortecer. O torque do fluido passa por uma média móvel exponencial antes de entrar na equação, pra filtrar o modo de alta frequência que uma pá fina (massa adicionada) introduz no acoplamento fluido-estrutura explícito.
 
 A velocidade angular é limitada a `ω_max = 0.10 / r_max` para garantir que a velocidade de ponta das pás permaneça dentro da faixa de estabilidade do solver.
 
@@ -302,43 +325,68 @@ Células **Entrada** impõem velocidade e densidade a cada passo, atuando como b
 3. Arraste na direção desejada — distância de arraste controla a velocidade (máx. ~20 células)
 4. Solte para confirmar; `Esc` para cancelar
 
+Alternativa mais rápida: com a Entrada já desenhada, o **painel de controle** (faixa abaixo do canvas) tem um slider de velocidade inline por Entrada — mantém o ângulo já escolhido, só muda a magnitude.
+
 > A velocidade máxima de uma Entrada é `0.15` (mesma faixa validada para estabilidade do solver).
 
 ---
 
 ## 🔴 Sistema de Saída (Sink)
 
-Células **Saída** simulam um dreno: absorvem fluido criando um gradiente de baixa pressão que atrai o fluido vizinho.
+Células **Saída** funcionam como um ralo de verdade: a cada passo, a célula drena uma fração `α` (força de sucção) da sua própria massa, escalando as 9 distribuições do LBM por `1 - α`. Como a velocidade macroscópica é `u = Σf·c / ρ`, escalar todas as direções pelo mesmo fator derruba a densidade `ρ` mas deixa `u` exatamente onde estava — nenhuma direção é privilegiada, então não existe reflexão possível e portanto nenhum "efeito barreira" desviando o fluxo em volta. Quem puxa o fluido vizinho é o gradiente de pressão criado pela própria queda de `ρ`, o mesmo mecanismo de um ralo físico.
 
-### Mecanismo de amortecimento em rampa
+A força de sucção é ajustável por Saída (0 a `SINK_MAX_SUCTION`, padrão `SINK_DEFAULT_SUCTION = 0.02`) por um slider dentro do próprio módulo "S1"/"S2"/etc. no painel de controle abaixo do canvas — mesmo lugar do interruptor liga/desliga e do slider de velocidade da Entrada. Sucção `0` reproduz o comportamento antigo (célula totalmente transparente à física).
 
-Via **BFS a partir das bordas** da região de Saída, calcula-se a profundidade de cada célula:
+Uma ressalva real: um ralo dentro de um recinto **totalmente selado** por barreiras (sem nenhuma borda aberta repondo massa) esvaziaria o recinto indefinidamente. Isso é evitado por um piso de densidade (`SINK_RHO_FLOOR = 0.6`, com rampa suave entre o piso e `ρ = 1`): abaixo dele a célula para de drenar, então esse caso converge para um equilíbrio estável em vez de degenerar.
+
+Traçadores de fluxo, traçadores de fumaça e partículas físicas continuam sendo ativamente reciclados/removidos ao tocarem uma célula Saída (`moveTracers`, `moveDyeTracers`, `_updateParticles`), como reforço visual por cima da sucção física de verdade.
+
+---
+
+## 🕸️ Grade (Barreira Permeável)
+
+A Grade é um tipo de barreira que **nunca bloqueia o fluido** — fica de fora do bounce-back do LBM de propósito, então vento, fumaça e traçadores sempre a atravessam. O que ela faz é **frear** a velocidade macroscópica, célula a célula, dentro de `collide()`:
 
 ```
-sinkDamping[i] = min(0.9,  depth[i] / 8  ×  0.9)
+u_nova = u × MESH_RESISTANCE_KEEP     (0.85 por célula)
 ```
 
-A densidade é puxada suavemente em direção a `ρ_alvo = 0.97`:
+Como o efeito é multiplicativo ao longo da espessura (`keep^N`, não `keep × N`), uma faixa mais espessa resiste mais — igual várias telas empilhadas — sem depender de nenhum parâmetro extra: 1 célula reduz ~15% da velocidade local, 6 células reduzem ~62%.
 
-```
-ρ_novo = ρ − (ρ − 0.97) × damping
-```
+O que a Grade bloqueia de verdade são **partículas físicas** grandes demais: cada Grade tem um **Tamanho do Furo** (ajustável no painel flutuante ao selecioná-la) e uma partícula só atravessa se o próprio diâmetro for menor que o furo — do contrário, quica de volta como se fosse uma Barreira sólida.
 
-A velocidade local **não é alterada** — isso cria uma sucção por gradiente de pressão real em vez de uma resistência que desviaria o escoamento para os lados.
+---
+
+## 🎈 Partículas Físicas
+
+Diferente dos traçadores de fluxo/fumaça (sem massa, só seguem a velocidade local), as partículas físicas têm dinâmica própria: arrasto em direção à velocidade do fluido (nas duas componentes — um fluxo ascendente lanta de verdade, não só empurra pro lado), gravidade constante, e colisão com quique (perda de energia) contra Barreira/Rotor/bordas do domínio/Grade com furo pequeno.
+
+**Um clique = um objeto avulso** — sem fonte contínua emitindo sem parar (diferente da Fumaça): você escolhe o tipo (Folha/Bolinha/Caixa) e o peso na barra de ferramentas, clica no canvas, e aquele objeto passa a existir na cena, sofrendo o vento normalmente. Ele desaparece de vez ao sair do domínio (arrastado para fora pelo vento) ou ao tocar uma Saída — sem fonte, não há de onde reciclar de volta.
+
+Em vez de três presets desconectados, os parâmetros físicos são interpolados a partir de um único **peso** contínuo (0 = leve, 1 = pesado) — trocar o tipo no seletor pula o peso para um ponto de partida sensato (Folha 0.15, Bolinha 0.5, Caixa 0.85), mas o slider de Peso continua livre para ajustar depois:
+
+| Parâmetro | Peso 0 (leve) | Peso 1 (pesado) | Interpolação |
+|---|---|---|---|
+| Raio | 0.18 célula | 0.55 célula | linear |
+| Arrasto | máximo (segue o vento de perto) | mínimo (mais inércia) | **logarítmica** — o que se percebe é o tempo de resposta (~1/arrasto), não o coeficiente em si |
+| Gravidade | quase nula (flutua) | máxima (cai rápido) | linear |
+
+Pool fixo de até 300 partículas ativas simultâneas.
 
 ---
 
 ## 💾 Import / Export de Configuração
 
-O formato de configuração é **JSON versão 16**. Inclui:
+O formato de configuração é **JSON versão 17**. Inclui:
 
 ```json
 {
-  "version": 16,
+  "version": 17,
   "xdim": 320,
   "ydim": 180,
   "boundaryMode": "channel",
-  "cellTypes": [...],
+  "rawCellType": [...],
+  "shapes": [...],
   "sourceVx": [...],
   "sourceVy": [...],
   "dyeSources": [...],
@@ -351,11 +399,19 @@ O formato de configuração é **JSON versão 16**. Inclui:
   "contrast": "0",
   "showTracers": false,
   "showForce": false,
-  "showSensor": false
+  "showArrows": false,
+  "showSensor": false,
+  "zoom": 1,
+  "panX": 0,
+  "panY": 0
 }
 ```
 
-> ⚠️ Arquivos com `version < 15` são rejeitados (formato incompatível com rotores e tamanho de grade variável).
+- `shapes[]` guarda cada forma vetorial (Barreira/Entrada/Saída/Rotor/Válvula/Grade) com sua geometria e propriedades próprias — `holeSize` para Grade, `enabled` para Entrada/Saída/Válvula, `lineWidth` para linhas.
+- `rotatingBodies[]` inclui `massMultiplier`/`damping`/`stiffness`/`motorDirection`/`motorSpeed` por corpo.
+- Partículas físicas (bolinhas/caixas/folhas) NÃO entram no arquivo — são objetos avulsos, carimbados um por clique e sem uma "fonte" que os defina (ver seção própria abaixo); como qualquer outro estado vivo da simulação (traçadores, fumaça em voo), elas não sobrevivem a um export/import nem a um Ctrl+Z, só a cena que você desenhou.
+
+> ⚠️ Arquivos com `version < 15` são rejeitados (formato incompatível com rotores e tamanho de grade variável). Campos que não existiam numa versão anterior (Motor do Rotor, `holeSize`) caem no padrão ao importar um arquivo mais antigo.
 
 A grade importada usa **exatamente** as dimensões `xdim × ydim` do arquivo — zoom e pan cuidam da exibição independente do tamanho da janela.
 
@@ -403,10 +459,13 @@ Slider de 1–40 **passos por frame**. O loop roda `stepsPerFrame` passos comple
 
 ## ⚖️ Estabilidade Numérica
 
-O método LBM BGK monitora instabilidades verificando a cada passo:
+Além de só detectar o estrago depois de feito, o solver tem um **limitador de segurança** (um "realizability limiter", técnica padrão em LBM) dentro de `collide()`, célula a célula, ANTES de montar o equilíbrio: grampeia a densidade entre 0,2 e 3,0 e a velocidade a no máximo 0,3 — bem acima do uso normal, mas abaixo do limiar de ruptura. Isso evita que a maioria dos picos numéricos vire NaN e se espalhe pra grade inteira no passo seguinte.
 
-- `ρ ≤ 0` ou `ρ` não finito
+O detector de instabilidade verifica a cada passo:
+
+- `ρ ≤ 0` ou `ρ`/`ux`/`uy` não finitos
 - `|ux| > 0.5` ou `|uy| > 0.5` (limite de Mach do modelo D2Q9)
+- Mais de **5% da grade** grampeada pelo limitador de segurança acima — sem esta checagem, o limitador acaba cegando as duas de cima (elas leem exatamente os valores que ele já corrigiu), então uma simulação genuinamente divergente (ex.: viscosidade bem abaixo do mínimo do slider) podia reportar "estável" com um quarto da grade presa no teto do limitador. O limiar de 5% foi calibrado medindo: nos ajustes normais do app o limitador nunca passa de ~2%, e uma simulação realmente arruinada passa de 20%.
 
 Ao detectar instabilidade, a simulação pausa e oferece a opção de **resetar o fluido**.
 
@@ -483,11 +542,11 @@ simulacao-de-dinamica-dos-fluidos/
 
 | Arquivo | Linhas | Responsabilidade |
 |---|---|---|
-| `FluidSimulationApp.js` | ~1533 | UI, ferramentas, estado da aplicação |
-| `FluidSolver.js` | ~1012 | Física LBM, rotores, traçadores |
-| `Renderer.js` | ~601 | Renderização Canvas 2D |
-| `index.html` | ~184 | Estrutura HTML e controles |
-| `style.css` | ~380 | Estilos e tema escuro |
+| `FluidSimulationApp.js` | ~4300 | UI, ferramentas, estado da aplicação |
+| `FluidSolver.js` | ~1500 | Física LBM, rotores, partículas, traçadores |
+| `Renderer.js` | ~1180 | Renderização Canvas 2D |
+| `index.html` | ~300 | Estrutura HTML e controles |
+| `style.css` | ~1240 | Estilos e tema escuro |
 
 ---
 

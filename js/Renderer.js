@@ -1,4 +1,4 @@
-import { FluidSolver } from './FluidSolver.js?v=20260713p';
+import { FluidSolver } from './FluidSolver.js?v=20260908d';
 
 /**
  * @class Renderer
@@ -213,6 +213,7 @@ export class Renderer {
         this.drawSmoothLineShapes(viewState.shapes, solver.ydim, pxPerSquare, viewState.hasEverStepped);
         this.drawDyeSources(solver, pxPerSquare, viewState.selectedDyeSourceIndex, viewState.draggingDyeSource);
         this.drawDyeTracers(solver, pxPerSquare);
+        this.drawParticles(solver, pxPerSquare);
         this.drawRotorPivots(solver, pxPerSquare, viewState.selectedRotorIndex, viewState.draggingRotorPivot);
         this.drawSourceGroupHandles(solver, pxPerSquare, solver.ydim, viewState.editingSourceGroupIndex);
         this.drawShapeSelection(viewState.shapes, viewState.selectedShapeIndex, solver.ydim, pxPerSquare);
@@ -441,7 +442,11 @@ export class Renderer {
             [FluidSolver.CELL_TYPE.SOURCE]: 'rgb(56, 189, 248)',
             [FluidSolver.CELL_TYPE.SINK]: 'rgb(255, 93, 93)',
             [FluidSolver.CELL_TYPE.ROTOR]: 'rgb(167, 139, 250)',
-            [FluidSolver.CELL_TYPE.VALVE]: 'rgb(34, 197, 94)'
+            [FluidSolver.CELL_TYPE.VALVE]: 'rgb(34, 197, 94)',
+            // Cinza-azulado, de propósito bem distinto do quase-preto da Barreira — a Grade
+            // NUNCA bloqueia de verdade (bugs.md #32), então precisa ler como "permeável" já na
+            // cor, antes mesmo de reparar na opacidade menor logo abaixo.
+            [FluidSolver.CELL_TYPE.MESH]: 'rgb(100, 116, 139)'
         };
         this.context.save();
         this.context.lineCap = 'round';
@@ -463,7 +468,10 @@ export class Renderer {
             }
             const color = colorByType[shape.cellType];
             if (!color) continue;
-            this.context.globalAlpha = isPassage ? 0.35 : 1;
+            // Grade sempre semi-transparente (nunca cheia como Barreira, nem apagada como uma
+            // passagem aberta) — não tem estado ligado/desligado, é sempre a mesma coisa: uma
+            // tela que deixa o vento passar com resistência (bugs.md #32).
+            this.context.globalAlpha = shape.cellType === FluidSolver.CELL_TYPE.MESH ? 0.55 : (isPassage ? 0.35 : 1);
 
             const lw = (shape.lineWidth ?? 1.75) * pxPerSquare;
             this.context.strokeStyle = color;
@@ -746,6 +754,59 @@ export class Renderer {
             this.context.beginPath();
             this.context.arc(cX, cY, radius, 0, 2 * Math.PI);
             this.context.fill();
+        }
+    }
+
+    /**
+     * @description Desenha cada partícula física ativa (bugs.md #32) com uma forma dependendo
+     * de `shapeType` (só estético — a física em si só depende de `weight`, ver
+     * `FluidSolver.particlePhysicsFromWeight`): Folha (elipse achatada verde), Bolinha (círculo
+     * laranja com um realce, como uma bola sólida) e Caixa (quadrado marrom). O tamanho em tela
+     * vem do `radius` gravado na própria partícula (em células), fixado no nascimento a partir
+     * do peso da fonte que a gerou.
+     */
+    drawParticles(solver, pxPerSquare) {
+        if (!solver.particles) return;
+        for (const p of solver.particles) {
+            if (p.x < 0) continue;
+            const cX = (p.x + 0.5) * pxPerSquare;
+            const cY = (solver.ydim - (p.y + 0.5)) * pxPerSquare;
+            const r = Math.max(1.5, p.radius * pxPerSquare);
+            this.context.save();
+            this.context.translate(cX, cY);
+            if (p.shapeType === 'leaf') {
+                this.context.fillStyle = '#4ade80';
+                this.context.strokeStyle = 'rgba(6, 78, 32, 0.6)';
+                this.context.lineWidth = 1;
+                this.context.beginPath();
+                // Elipse achatada girada conforme a direção do movimento — dá uma sugestão de
+                // "flutuando/tombando ao vento" sem precisar simular rotação de verdade.
+                const angle = Math.atan2(-p.vy, p.vx);
+                this.context.rotate(angle);
+                this.context.ellipse(0, 0, r, r * 0.55, 0, 0, 2 * Math.PI);
+                this.context.fill();
+                this.context.stroke();
+            } else if (p.shapeType === 'box') {
+                this.context.fillStyle = '#b45309';
+                this.context.strokeStyle = 'rgba(60, 24, 4, 0.7)';
+                this.context.lineWidth = 1;
+                this.context.fillRect(-r, -r, r * 2, r * 2);
+                this.context.strokeRect(-r, -r, r * 2, r * 2);
+            } else {
+                this.context.fillStyle = '#f97316';
+                this.context.strokeStyle = 'rgba(67, 20, 7, 0.7)';
+                this.context.lineWidth = 1;
+                this.context.beginPath();
+                this.context.arc(0, 0, r, 0, 2 * Math.PI);
+                this.context.fill();
+                this.context.stroke();
+                // Pequeno realce — sugere volume 3D numa bolinha sólida, sem custar quase nada.
+                this.context.fillStyle = 'rgba(255, 255, 255, 0.35)';
+                this.context.beginPath();
+                this.context.arc(-r * 0.3, -r * 0.3, r * 0.35, 0, 2 * Math.PI);
+                this.context.fill();
+            }
+            this.context.restore();
         }
     }
 

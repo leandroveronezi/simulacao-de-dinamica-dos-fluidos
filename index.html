@@ -60,11 +60,24 @@
             </div>
             <div class="ribbon-group">
                 <button class="tool-button" data-tool="smoke" title="Fumaça / Corante"><i class="fa-solid fa-smog"></i><span class="label">Fumaça</span></button>
+                <button class="tool-button" data-tool="particles" title="Partículas físicas (bolinhas/caixas/folhas)"><i class="fa-solid fa-circle-dot"></i><span class="label">Partículas</span></button>
                 <button class="tool-button" data-tool="select" title="Seleção"><i class="fa-solid fa-vector-square"></i><span class="label">Seleção</span></button>
+            </div>
+            <div id="particleToolOptions" class="ribbon-group ribbon-particle-options" hidden>
+                <select id="particleTypeSelect" title="Tipo de partícula (só define o ponto de partida do peso e o desenho — ajustável depois)">
+                    <option value="leaf">Folha</option>
+                    <option value="ball" selected>Bolinha</option>
+                    <option value="box">Caixa</option>
+                </select>
+                <label class="ribbon-inline-slider" title="Peso: 0 = flutua/segue o vento, 1 = pesado/cai rápido">
+                    Peso <span id="particleWeightValue">0.50</span>
+                    <input id="particleWeightSlider" type="range" min="0" max="1" step="0.05" value="0.5">
+                </label>
             </div>
         </div>
 
         <main id="simulation-container">
+            <div id="canvas-column">
             <div id="canvas-container">
                 <canvas id="theCanvas">Seu navegador não suporta a tag canvas do HTML5.</canvas>
                 <div id="simulationControlsWidget" class="viewport-simulation-controls">
@@ -85,8 +98,6 @@
                     <button id="resetZoomButton" class="icon-button" title="Redefinir Zoom"><i class="fa-solid fa-compress"></i></button>
                     <button id="zoomInButton" class="icon-button" title="Aumentar Zoom"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
                 </div>
-
-                <div id="valveControlsWidget" class="viewport-valve-controls" hidden></div>
 
                 <div id="floatingPropertyPanel" class="floating-panel" hidden>
                     <div class="floating-panel-header">
@@ -130,6 +141,22 @@
                             </label>
                         </div>
                         <div id="floatingPanelRotorControls" hidden>
+                            <label>Motor
+                                <i id="rotorMotorHelp" class="fas fa-circle-question help-icon" title="Entenda o motor"></i>
+                            </label>
+                            <div class="rotor-motor-switch" role="group" aria-label="Motor do rotor">
+                                <!-- O valor é o SINAL da velocidade angular, não a posição do botão: o
+                                     renderer desenha a grade com o eixo Y para cima, então omega
+                                     positivo aparece girando à esquerda (anti-horário) na tela. -->
+                                <button type="button" data-motor="1" title="Girar no sentido anti-horário"><i class="fa-solid fa-rotate-left"></i></button>
+                                <button type="button" data-motor="0" class="active" title="Motor desligado (turbina livre)"><i class="fa-solid fa-power-off"></i></button>
+                                <button type="button" data-motor="-1" title="Girar no sentido horário"><i class="fa-solid fa-rotate-right"></i></button>
+                            </div>
+                            <div id="rotorMotorSpeedRow" hidden>
+                                <label for="rotorMotorSpeedSlider">Velocidade do Motor: <span id="rotorMotorSpeedValue">50%</span></label>
+                                <input id="rotorMotorSpeedSlider" type="range" min="5" max="100" step="5" value="50">
+                            </div>
+
                             <label for="rotorMassSlider">Massa/Densidade: <span id="rotorMassValue">1.0</span></label>
                             <input id="rotorMassSlider" type="range" min="0.2" max="5" step="0.1" value="1">
 
@@ -142,9 +169,19 @@
                             <input id="rotorStiffnessSlider" type="range" min="0" max="0.05" step="0.001" value="0">
                             <small>0 = turbina livre. Maior que 0 = palheta elástica.</small>
                         </div>
+                        <div id="floatingPanelMeshControls" hidden>
+                            <label for="meshHoleSizeSlider">Tamanho do Furo: <span id="meshHoleSizeValue">0.30</span>
+                                <i id="meshHoleSizeHelp" class="fas fa-circle-question help-icon" title="Entenda o furo"></i>
+                            </label>
+                            <input id="meshHoleSizeSlider" type="range" min="0.1" max="1.5" step="0.05" value="0.3">
+                            <small>Bloqueia partículas maiores que o furo. Vento/fumaça/traçadores sempre atravessam (com resistência).</small>
+                        </div>
                         <button id="deleteShapeButton" class="contrast" type="button" hidden><i class="fa-solid fa-trash-can"></i> Apagar forma</button>
                     </div>
                 </div>
+            </div>
+
+            <div id="controlPanelBar" class="control-panel-bar" hidden></div>
             </div>
 
             <aside id="right-sidebar" class="sidebar">
@@ -156,6 +193,7 @@
                         <button class="paint-type-button" data-paint-type="sink"><i class="fa-solid fa-arrow-right-from-bracket"></i> Saída</button>
                         <button class="paint-type-button" data-paint-type="rotor"><i class="fa-solid fa-fan"></i> Rotor</button>
                         <button class="paint-type-button" data-paint-type="valve"><i class="fa-solid fa-door-closed"></i> Válvula</button>
+                        <button class="paint-type-button" data-paint-type="mesh"><i class="fa-solid fa-border-none"></i> Grade</button>
                     </div>
                 </details>
 
@@ -176,11 +214,24 @@
 
                 <details open>
                     <summary><i class="fa-solid fa-sliders"></i> Simulação</summary>
-                    <label for="boundaryModeSelect">Modo de Simulação</label>
+                    <label for="boundaryModeSelect">Modo de Simulação
+                        <i id="boundaryModeHelp" class="fas fa-circle-question help-icon" title="Entenda os modos"></i>
+                    </label>
                     <select id="boundaryModeSelect">
-                        <option value="channel" selected>Canal</option>
-                        <option value="open">Mundo Aberto</option>
+                        <option value="channel" selected>Canal (vento pela borda esquerda)</option>
+                        <option value="open">Mundo Aberto (só as Entradas sopram)</option>
                     </select>
+
+                    <label for="gridWidthInput">Tamanho da Grade
+                        <i id="gridSizeHelp" class="fas fa-circle-question help-icon" title="Entenda o tamanho da grade"></i>
+                    </label>
+                    <div class="grid-size-row">
+                        <input id="gridWidthInput" type="number" min="40" max="2000" step="10" aria-label="Largura da grade em células">
+                        <span class="grid-size-times">×</span>
+                        <input id="gridHeightInput" type="number" min="40" max="2000" step="10" aria-label="Altura da grade em células">
+                        <button id="applyGridSizeButton" class="grid-size-apply" type="button">Aplicar</button>
+                    </div>
+                    <small id="gridSizeHint" class="grid-size-hint"></small>
 
                     <label for="speedSlider">Velocidade do Fluxo: <span id="speedValue">0.100</span>
                         <i id="speedHelp" class="fas fa-circle-question help-icon" title="Entenda a velocidade"></i>
@@ -234,7 +285,7 @@
 
 
     <div id="app-tooltip"></div>
-    <script type="module" src="main.js?v=20260713p"></script>
+    <script type="module" src="main.js?v=20260908d"></script>
 </body>
 
 </html>
