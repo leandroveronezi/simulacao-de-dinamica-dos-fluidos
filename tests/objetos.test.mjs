@@ -180,3 +180,115 @@ test('traçadores NÃO nascem em sólidos: nem na criação, nem ao reentrar pel
     for (let y = 0; y < 80; y++) if (y < 20 || y >= 30) s.setCell(0, y, CT.BARRIER);
     for (let i = 0; i < 200; i++) assert.ok(s._isFreeForTracer(0, s._randomFreeEntryY()), 'reentrou em sólido');
 });
+
+// ---- Traçadores e fumaça são "partículas visíveis sem massa": obedecem ao mesmo ambiente. ----
+
+test('Mundo Aberto: nenhum traçador de fluxo se perde fora do domínio', () => {
+    const s = new FluidSolver(100, 60); s.boundaryMode = 'open'; s.initFluid(0); s.initTracers(true);
+    const src = []; for (let x = 20; x <= 80; x++) src.push({ x, y: 5 });
+    s.addSourceGroup(src, 0, 0.08); for (const c of src) s.setCell(c.x, c.y, CT.SOURCE);
+    for (let i = 0; i < 2500; i++) s.step({ u0: 0, viscosity: VISC, moveTracers: true });
+    let fora = 0;
+    for (let t = 0; t < s.tracerX.length; t++) if (s.tracerX[t] < 0 || s.tracerX[t] > 99 || s.tracerY[t] < 0 || s.tracerY[t] > 59) fora++;
+    assert.equal(fora, 0, `${fora} traçadores fora do domínio`);
+});
+
+test('velocidade amostrada: Barreira é parede parada e o Rotor leva a velocidade da própria pá', () => {
+    const s = new FluidSolver(60, 40); s.boundaryMode = 'open'; s.initFluid(0);
+    s.setCell(10, 10, CT.BARRIER);
+    s.ux.fill(0.05);
+    let v = s._sampleVelocity(10.5, 10.5);
+    assert.ok(v[0] < 0.05 * 0.8, `junto da barreira a velocidade deveria cair: ${v[0]}`);
+    const cells = []; for (let y = 15; y <= 25; y++) cells.push({ x: 30, y });
+    s.addRotatingBody(cells, null, { motorDirection: 1, motorSpeed: 1 }); s.stampRotatingBodiesOntoGrid();
+    const b = s.rotatingBodies[0]; b.omega = 0.05;
+    for (const c of b.currentCells) { s.rotorWallVx[c.x + c.y * 60] = -b.omega * (c.y - b.pivotY); s.rotorWallVy[c.x + c.y * 60] = b.omega * (c.x - b.pivotX); }
+    const topo = { x: 30, y: 25 };
+    v = s._sampleVelocity(topo.x, topo.y); // exatamente no canto da célula do rotor: peso 1
+    assert.ok(Math.abs(v[0] - s.rotorWallVx[topo.x + topo.y * 60]) < 1e-9, `vx = ${v[0]} vs parede ${s.rotorWallVx[topo.x + topo.y * 60]}`);
+});
+
+test('pá empurra a fumaça: com o fluido congelado, só o contato a move, sem sumir nem ficar presa', () => {
+    const s = new FluidSolver(80, 60); s.boundaryMode = 'open'; s.initFluid(0);
+    const cells = []; for (let y = 20; y <= 40; y++) cells.push({ x: 40, y });
+    s.addRotatingBody(cells, null, { motorDirection: 1, motorSpeed: 1, damping: 0.02 }); s.stampRotatingBodiesOntoGrid();
+    // Sem fonte de fumaça: reciclar apagaria o ponto (x = -1), então "continuar ativo" prova que
+    // ele foi empurrado e não reciclado.
+    s.dyeTracers[0].x = 43.5; s.dyeTracers[0].y = 38.5;
+    const inicio = { x: 43.5, y: 38.5 }; let preso = 0, maxPreso = 0, deslocMax = 0;
+    for (let i = 0; i < 2500; i++) {
+        s.step({ u0: 0, viscosity: VISC, moveTracers: false });
+        s.ux.fill(0); s.uy.fill(0);
+        const t = s.dyeTracers[0];
+        assert.ok(t.x >= 0, `a fumaça foi reciclada/apagada no passo ${i}`);
+        preso = s._isSolidAtPoint(t.x, t.y) ? preso + 1 : 0; maxPreso = Math.max(maxPreso, preso);
+        deslocMax = Math.max(deslocMax, Math.hypot(t.x - inicio.x, t.y - inicio.y));
+    }
+    assert.ok(maxPreso <= 1, `fumaça dentro do sólido por ${maxPreso} passos seguidos`);
+    assert.ok(deslocMax > 1.5, `a pá não moveu a fumaça (deslocamento máx = ${deslocMax})`);
+});
+
+test('traçador de fluxo também é empurrado pela pá (e não reciclado na entrada)', () => {
+    const s = new FluidSolver(80, 60); s.boundaryMode = 'open'; s.initFluid(0); s.initTracers(false);
+    const cells = []; for (let y = 20; y <= 40; y++) cells.push({ x: 40, y });
+    s.addRotatingBody(cells, null, { motorDirection: 1, motorSpeed: 1, damping: 0.02 }); s.stampRotatingBodiesOntoGrid();
+    s.tracerX[0] = 43.5; s.tracerY[0] = 38.5;
+    let reciclado = false, deslocMax = 0;
+    for (let i = 0; i < 2500; i++) {
+        s.step({ u0: 0, viscosity: VISC, moveTracers: true });
+        s.ux.fill(0); s.uy.fill(0);
+        if (s.tracerX[0] < 5 && Math.abs(s.tracerX[0] - 43.5) > 30) reciclado = true;
+        deslocMax = Math.max(deslocMax, Math.hypot(s.tracerX[0] - 43.5, s.tracerY[0] - 38.5));
+    }
+    assert.equal(reciclado, false, 'o traçador foi reciclado na borda de entrada');
+    assert.ok(deslocMax > 1.5, `deslocamento máx = ${deslocMax}`);
+});
+
+test('no canal, topo e fundo refletem o ponto sem massa; no Mundo Aberto ele é reciclado', () => {
+    const s = new FluidSolver(60, 40); s.initFluid(0);
+    let r = s._resolveMasslessStep(20, 38.8, 0, 0.6);
+    assert.equal(r.action, 'move'); assert.ok(r.y <= 39 && r.y >= 0, `y = ${r.y}`);
+    r = s._resolveMasslessStep(20, 0.3, 0, -0.6);
+    assert.equal(r.action, 'move'); assert.ok(r.y >= 0 && r.y <= 39, `y = ${r.y}`);
+    s.boundaryMode = 'open';
+    assert.equal(s._resolveMasslessStep(20, 38.8, 0, 0.6).action, 'recycle');
+    assert.equal(s._resolveMasslessStep(0.2, 20, -0.5, 0).action, 'recycle');
+});
+
+function rotorParado() {
+    const s = new FluidSolver(80, 60); s.boundaryMode = 'open'; s.initFluid(0);
+    const cells = []; for (let y = 20; y <= 40; y++) cells.push({ x: 40, y });
+    s.addRotatingBody(cells, null, {}); s.stampRotatingBodiesOntoGrid();
+    return s;
+}
+
+test('fumaça alcançada pela pá é empurrada para fora no mesmo passo (não fica dentro nem é apagada)', () => {
+    const s = rotorParado();
+    s.dyeTracers[0].x = 40.5; s.dyeTracers[0].y = 30.5; // dentro de uma célula do Rotor
+    assert.ok(s._isSolidAtPoint(40.5, 30.5));
+    s.moveDyeTracers();
+    const t = s.dyeTracers[0];
+    assert.ok(t.x >= 0, 'a fumaça foi apagada');
+    assert.equal(s._isSolidAtPoint(t.x, t.y), false, `continua dentro do sólido em (${t.x}, ${t.y})`);
+    assert.ok(Math.hypot(t.x - 40.5, t.y - 30.5) < 3, 'foi parar longe demais (teletransporte)');
+});
+
+test('traçador de fluxo alcançado pela pá é empurrado para fora no mesmo passo', () => {
+    const s = rotorParado(); s.initTracers(false);
+    s.tracerX[0] = 40.5; s.tracerY[0] = 30.5;
+    s.moveTracers();
+    assert.equal(s._isSolidAtPoint(s.tracerX[0], s.tracerY[0]), false);
+    assert.ok(Math.hypot(s.tracerX[0] - 40.5, s.tracerY[0] - 30.5) < 3, 'foi parar longe demais (teletransporte)');
+});
+
+test('o ponto ejetado leva a velocidade da superfície da pá', () => {
+    const s = rotorParado(); const b = s.rotatingBodies[0];
+    b.omega = 0.05;
+    for (const c of b.currentCells) { s.rotorWallVx[c.x + c.y * 80] = -b.omega * (c.y - b.pivotY); s.rotorWallVy[c.x + c.y * 80] = b.omega * (c.x - b.pivotX); }
+    // Acima do pivô (r_y = 8) com ω > 0, a superfície se move em -x com v = ω·r = 0,4 (v = ω × r).
+    const r = s._resolveMasslessStep(40.5, 38.5, 0, 0);
+    assert.equal(r.action, 'move');
+    const livre = s._nearestFreePoint(40.5, 38.5);
+    assert.ok(Math.abs((r.x - livre.x) - (-0.4)) < 1e-4, `dx = ${r.x - livre.x}, esperado -0,4 (velocidade da pá)`);
+    assert.ok(Math.abs(r.y - livre.y) < 1e-4, `dy = ${r.y - livre.y}`);
+});

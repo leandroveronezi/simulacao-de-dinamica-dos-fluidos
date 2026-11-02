@@ -50,7 +50,12 @@ comportamento for intencional: `UPDATE_SNAPSHOT=1 npm run test:ui`.
   Em área aberta, vira pintura livre.
 - **Borracha** (retangular ou em traço livre): corta de verdade as formas vetoriais, apagando só
   a parte coberta. O Rotor só é removido pela seleção e Delete.
-- **Fumaça:** define pontos que emitem traçadores coloridos (até 4000).
+- **Fumaça e traçadores:** a fumaça (pontos que emitem traçadores coloridos, até 4000) e os
+  traçadores de fluxo são partículas visíveis **sem massa**: seguem a velocidade do fluido e
+  obedecem ao mesmo ambiente das partículas físicas. Deslizam ao longo de Barreiras, são
+  arrastados por uma pá de Rotor que os toca e empurrados para fora se ela os alcança, somem em
+  uma Saída, atravessam a Grade (são menores que qualquer furo) e, no Canal, refletem no topo e
+  no fundo. No Mundo Aberto, quem sai do domínio reaparece em outro ponto livre.
 - **Partículas:** cada clique solta um objeto avulso (folha, bolinha ou caixa) com peso
   ajustável. Eles sofrem vento e gravidade, e quicam em Barreira, Rotor e bordas. Somem ao sair
   do domínio ou tocar uma Saída (até 300 ao mesmo tempo).

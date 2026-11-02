@@ -1309,6 +1309,37 @@ export class FluidSolver {
 
     /**
      * @private
+     * @description Velocidade do fluido no ponto contínuo (x, y), para tudo que é "partícula" —
+     * traçadores, fumaça e partículas físicas. Interpola bilinearmente, mas cada canto SÓLIDO é
+     * tratado pelo que fisicamente é, e não pelo valor interno da célula (que, num sólido, não
+     * descreve fluido nenhum): Barreira = parede parada (0), Rotor = a velocidade da própria
+     * superfície da pá (`rotorWallVx/Vy`). Assim, junto de uma pá em movimento o ponto é levado
+     * por ela (não-deslizamento) e junto de uma parede fixa ele desacelera. Devolve [ux, uy] num
+     * array reutilizado (copie antes de chamar de novo).
+     */
+    _sampleVelocity(x, y) {
+        const out = this._velSample || (this._velSample = new Float64Array(2));
+        const xdim = this.xdim, ydim = this.ydim;
+        const BARRIER = FluidSolver.CELL_TYPE.BARRIER, ROTOR = FluidSolver.CELL_TYPE.ROTOR;
+        const cell = (cx, cy, k) => {
+            cx = cx < 0 ? 0 : cx >= xdim ? xdim - 1 : cx;
+            cy = cy < 0 ? 0 : cy >= ydim ? ydim - 1 : cy;
+            const i = cx + cy * xdim, t = this.cellType[i];
+            if (t === BARRIER) return 0;
+            if (t === ROTOR) return k === 0 ? this.rotorWallVx[i] : this.rotorWallVy[i];
+            return k === 0 ? this.ux[i] : this.uy[i];
+        };
+        const x0 = Math.floor(x), y0 = Math.floor(y);
+        const wx = x - x0, wy = y - y0;
+        for (let k = 0; k < 2; k++) {
+            out[k] = cell(x0, y0, k) * (1 - wx) * (1 - wy) + cell(x0 + 1, y0, k) * wx * (1 - wy) +
+                cell(x0, y0 + 1, k) * (1 - wx) * wy + cell(x0 + 1, y0 + 1, k) * wx * wy;
+        }
+        return out;
+    }
+
+    /**
+     * @private
      * @description A correção de parede em movimento soma `+w` numa direção e `-w` na oposta, mas
      * só nas direções que apontam para células abertas; onde só um lado está aberto sobra massa
      * líquida (medido numa caixa fechada com o motor ligado: ~+1,3% de massa por 1000 passos).
@@ -1385,27 +1416,6 @@ export class FluidSolver {
         return true;
     }
 
-    _bilinearInterpolate(x, y, grid) {
-        const x0 = Math.floor(x);
-        const y0 = Math.floor(y);
-        const x1 = x0 + 1;
-        const y1 = y0 + 1;
-
-        if (x0 < 0 || y0 < 0 || x1 >= this.xdim || y1 >= this.ydim) {
-            const clampedX = Math.max(0, Math.min(this.xdim - 1, Math.round(x)));
-            const clampedY = Math.max(0, Math.min(this.ydim - 1, Math.round(y)));
-            return grid[clampedX + clampedY * this.xdim];
-        }
-
-        const v00 = grid[x0 + y0 * this.xdim];
-        const v01 = grid[x0 + y1 * this.xdim];
-        const v10 = grid[x1 + y0 * this.xdim];
-        const v11 = grid[x1 + y1 * this.xdim];
-        const wx = x - x0;
-        const wy = y - y0;
-        return v00 * (1 - wx) * (1 - wy) + v10 * wx * (1 - wy) + v01 * (1 - wx) * wy + v11 * wx * wy;
-    }
-
     /**
      * @description Move os traçadores de fluxo pelo campo de velocidade interpolado. Só a
      * Saída "absorve" de verdade (recicla o traçador de volta pra entrada) — é um dreno, faz
@@ -1415,52 +1425,103 @@ export class FluidSolver {
     moveTracers() {
         if (!this.tracerX) return;
         for (let t = 0; t < FluidSolver.N_TRACERS; t++) {
-            // Um traçador cuja célula ATUAL já é sólida (nasceu dentro de um obstáculo desenhado
-            // antes de ligá-los, ou o Rotor passou por cima dele) não tem como deslizar para
-            // fora; recicla na hora em vez de esperar TRACER_MAX_STUCK_STEPS passos parado ali.
-            const cx = Math.floor(this.tracerX[t]), cy = Math.floor(this.tracerY[t]);
-            if (cx >= 0 && cx < this.xdim && cy >= 0 && cy < this.ydim) {
-                const ct = this.cellType[cx + cy * this.xdim];
-                if (ct === FluidSolver.CELL_TYPE.BARRIER || ct === FluidSolver.CELL_TYPE.ROTOR) {
-                    this.tracerX[t] = 0;
-                    this.tracerY[t] = this._randomFreeEntryY();
-                    this.tracerStuck[t] = 0;
-                    continue;
-                }
-            }
-            const ux_interp = this._bilinearInterpolate(this.tracerX[t], this.tracerY[t], this.ux);
-            const uy_interp = this._bilinearInterpolate(this.tracerX[t], this.tracerY[t], this.uy);
+            const v = this._sampleVelocity(this.tracerX[t], this.tracerY[t]);
+            const ux_interp = v[0], uy_interp = v[1];
             if (!isFinite(ux_interp) || !isFinite(uy_interp)) continue;
-            const newX = this.tracerX[t] + ux_interp;
-            const newY = this.tracerY[t] + uy_interp;
-            const rx = Math.floor(newX);
-            const ry = Math.floor(newY);
-            const cellAtNew = (rx >= 0 && rx < this.xdim && ry >= 0 && ry < this.ydim) ? this.cellType[rx + ry * this.xdim] : -1;
-
-            if (newX > this.xdim - 1 || cellAtNew === FluidSolver.CELL_TYPE.SINK) {
-                this.tracerX[t] = 0;
-                this.tracerY[t] = this._randomFreeEntryY();
-                continue;
-            }
-            if (cellAtNew === FluidSolver.CELL_TYPE.BARRIER || cellAtNew === FluidSolver.CELL_TYPE.ROTOR) {
-                const slid = this._slideAlongSolid(this.tracerX[t], this.tracerY[t], newX, newY);
-                if (slid) {
-                    this.tracerX[t] = slid.x;
-                    this.tracerY[t] = slid.y;
-                    this.tracerStuck[t] = 0;
-                } else if (++this.tracerStuck[t] > FluidSolver.TRACER_MAX_STUCK_STEPS) {
-                    // Canto fechado dos dois lados ou estagnação: recicla na entrada, mesma
-                    // regra já usada pela Saída logo acima.
-                    this.tracerX[t] = 0;
-                    this.tracerY[t] = this._randomFreeEntryY();
-                    this.tracerStuck[t] = 0;
+            const r = this._resolveMasslessStep(this.tracerX[t], this.tracerY[t], ux_interp, uy_interp);
+            if (r.action === 'recycle') {
+                this._respawnTracer(t);
+            } else if (r.action === 'blocked') {
+                // Canto fechado dos dois lados ou estagnação: recicla, mesma regra da Saída.
+                if (++this.tracerStuck[t] > FluidSolver.TRACER_MAX_STUCK_STEPS) {
+                    this._respawnTracer(t);
                 }
-                continue;
+            } else {
+                this.tracerStuck[t] = 0;
+                this.tracerX[t] = r.x;
+                this.tracerY[t] = r.y;
             }
-            this.tracerStuck[t] = 0;
-            this.tracerX[t] = newX;
-            this.tracerY[t] = newY;
         }
+    }
+
+    /**
+     * @private
+     * @description Reaparece um traçador de fluxo. No modo Canal, na borda de entrada (esquerda),
+     * como sempre; no Mundo Aberto não existe entrada, então reaparece num ponto livre qualquer
+     * do domínio (quem saía pelo topo/laterais antes ficava fora do mundo para sempre: medido,
+     * 141 de 144 traçadores perdidos depois de ~2500 passos).
+     */
+    _respawnTracer(t) {
+        if (this.boundaryMode === 'open') {
+            const p = this._randomFreePoint();
+            this.tracerX[t] = p.x;
+            this.tracerY[t] = p.y;
+        } else {
+            this.tracerX[t] = 0;
+            this.tracerY[t] = this._randomFreeEntryY();
+        }
+        this.tracerStuck[t] = 0;
+    }
+
+    /** @private Um ponto livre (fora de Barreira/Rotor) sorteado em qualquer lugar do domínio. */
+    _randomFreePoint() {
+        for (let k = 0; k < 40; k++) {
+            const x = Math.random() * this.xdim, y = Math.random() * this.ydim;
+            if (this._isFreeForTracer(x, y)) return { x, y };
+        }
+        return { x: 0, y: this._randomFreeEntryY() };
+    }
+
+    /**
+     * @private
+     * @description Regra única de contato para pontos SEM massa (traçadores de fluxo e fumaça):
+     * dada a posição atual e a velocidade do fluido, devolve para onde o ponto vai.
+     *  - `{action:'move', x, y}`: segue (incluindo deslizar ao longo de uma Barreira);
+     *  - `{action:'recycle'}`: saiu do domínio ou caiu numa Saída;
+     *  - `{action:'blocked'}`: encurralado num canto, sem como deslizar.
+     * Interação com o Rotor: uma pá que toca o ponto o ARRASTA (não-deslizamento: ele ganha a
+     * velocidade da superfície, `rotorWallVx/Vy`) e uma pá que o alcança por dentro o EMPURRA
+     * para a célula livre mais próxima, em vez de o reciclar como se tivesse sumido. No modo
+     * Canal, topo e fundo são paredes de deslizamento livre: o ponto é refletido. No Mundo
+     * Aberto, qualquer borda é saída.
+     */
+    _resolveMasslessStep(x, y, ux, uy) {
+        const CTY = FluidSolver.CELL_TYPE;
+        // Já dentro de um sólido (a pá passou por cima, ou nasceu ali): ejeta, levando a pá junto.
+        const cx = Math.floor(x), cy = Math.floor(y);
+        if (cx >= 0 && cx < this.xdim && cy >= 0 && cy < this.ydim) {
+            const ct = this.cellType[cx + cy * this.xdim];
+            if (ct === CTY.BARRIER || ct === CTY.ROTOR) {
+                const livre = this._nearestFreePoint(x, y);
+                if (!livre) return { action: 'recycle' };
+                const i = cx + cy * this.xdim;
+                const wx = ct === CTY.ROTOR ? this.rotorWallVx[i] : 0, wy = ct === CTY.ROTOR ? this.rotorWallVy[i] : 0;
+                return { action: 'move', x: livre.x + wx, y: livre.y + wy };
+            }
+        }
+        let nx = x + ux, ny = y + uy;
+        // Bordas do domínio.
+        if (nx < 0 || nx > this.xdim - 1) return { action: 'recycle' };
+        if (ny < 0 || ny > this.ydim - 1) {
+            if (this.boundaryMode === 'open') return { action: 'recycle' };
+            ny = ny < 0 ? -ny : 2 * (this.ydim - 1) - ny; // parede de deslizamento livre: reflete
+            if (ny < 0 || ny > this.ydim - 1) ny = Math.max(0, Math.min(this.ydim - 1, ny));
+        }
+        const rx = Math.floor(nx), ry = Math.floor(ny);
+        const ct = this.cellType[rx + ry * this.xdim];
+        if (ct === CTY.SINK) return { action: 'recycle' };
+        if (ct === CTY.BARRIER || ct === CTY.ROTOR) {
+            const slid = this._slideAlongSolid(x, y, nx, ny);
+            if (!slid) return { action: 'blocked' };
+            if (ct === CTY.ROTOR) {
+                // A superfície em movimento arrasta o ponto que a toca.
+                const i = rx + ry * this.xdim;
+                const dx = slid.x + this.rotorWallVx[i], dy = slid.y + this.rotorWallVy[i];
+                if (this._isFreeForTracer(dx, dy)) return { action: 'move', x: dx, y: dy };
+            }
+            return { action: 'move', x: slid.x, y: slid.y };
+        }
+        return { action: 'move', x: nx, y: ny };
     }
 
     /**
@@ -1538,40 +1599,25 @@ export class FluidSolver {
     moveDyeTracers() {
         for (const tracer of this.dyeTracers) {
             if (tracer.x < 0) continue;
-            const ux_interp = this._bilinearInterpolate(tracer.x, tracer.y, this.ux);
-            const uy_interp = this._bilinearInterpolate(tracer.x, tracer.y, this.uy);
+            const v = this._sampleVelocity(tracer.x, tracer.y);
+            const ux_interp = v[0], uy_interp = v[1];
             if (!isFinite(ux_interp) || !isFinite(uy_interp)) {
                 this._recycleDyeTracer(tracer);
                 continue;
             }
-            const newX = tracer.x + ux_interp;
-            const newY = tracer.y + uy_interp;
-            const rx = Math.floor(newX);
-            const ry = Math.floor(newY);
-            if (rx < 0 || rx >= this.xdim || ry < 0 || ry >= this.ydim) {
+            const r = this._resolveMasslessStep(tracer.x, tracer.y, ux_interp, uy_interp);
+            if (r.action === 'recycle') {
                 this._recycleDyeTracer(tracer);
-                continue;
-            }
-            const cellType = this.cellType[rx + ry * this.xdim];
-            if (cellType === FluidSolver.CELL_TYPE.SINK) {
-                this._recycleDyeTracer(tracer);
-                continue;
-            }
-            if (cellType === FluidSolver.CELL_TYPE.BARRIER || cellType === FluidSolver.CELL_TYPE.ROTOR) {
-                const slid = this._slideAlongSolid(tracer.x, tracer.y, newX, newY);
-                if (slid) {
-                    tracer.x = slid.x;
-                    tracer.y = slid.y;
-                    tracer.stuck = 0;
-                } else if ((tracer.stuck = (tracer.stuck || 0) + 1) > FluidSolver.TRACER_MAX_STUCK_STEPS) {
+            } else if (r.action === 'blocked') {
+                if ((tracer.stuck = (tracer.stuck || 0) + 1) > FluidSolver.TRACER_MAX_STUCK_STEPS) {
                     tracer.stuck = 0;
                     this._recycleDyeTracer(tracer);
                 }
-                continue;
+            } else {
+                tracer.stuck = 0;
+                tracer.x = r.x;
+                tracer.y = r.y;
             }
-            tracer.stuck = 0;
-            tracer.x = newX;
-            tracer.y = newY;
         }
     }
 
@@ -1706,8 +1752,8 @@ export class FluidSolver {
     _updateParticles() {
         for (const p of this.particles) {
             if (p.x < 0) continue;
-            const fluidUx = this._bilinearInterpolate(p.x, p.y, this.ux);
-            const fluidUy = this._bilinearInterpolate(p.x, p.y, this.uy);
+            const fv = this._sampleVelocity(p.x, p.y);
+            const fluidUx = fv[0], fluidUy = fv[1];
             if (!isFinite(fluidUx) || !isFinite(fluidUy)) {
                 this._deactivateParticle(p);
                 continue;
