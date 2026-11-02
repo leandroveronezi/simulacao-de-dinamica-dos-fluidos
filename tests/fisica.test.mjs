@@ -209,3 +209,16 @@ test('a correção de massa do rotor não perturba a região em repouso fora da 
     for (let i = 0; i < W * 60; i++) { const x = i % W, y = (i / W) | 0; if (!(x >= 3 && x <= 76 && y >= 3 && y <= 56)) { const r = soma(c.s, i); mn = Math.min(mn, r); mx = Math.max(mx, r); } }
     assert.ok(mn > 0.99 && mx < 1.01, `densidade externa fugiu de 1: ${mn}..${mx}`);
 });
+
+test('Poiseuille: entre duas paredes sólidas o perfil é parabólico (não-deslizamento correto)', () => {
+    const W = 220, H = 32, y0 = 4, y1 = 27, s = new FluidSolver(W, H); s.initFluid(0.02);
+    for (let x = 0; x < W; x++) { s.setCell(x, y0, CT.BARRIER); s.setCell(x, y1, CT.BARRIER); }
+    step(s, 14000, 0.02, 0.1);
+    const ys = []; for (let y = y0 + 1; y < y1; y++) ys.push(y);
+    const u = ys.map(y => s.ux[170 + y * W]), mean = u.reduce((a, b) => a + b, 0) / u.length;
+    // Bounce-back: a parede fica a MEIA célula do nó de fluido mais próximo.
+    const yw0 = y0 + 0.5, hh = (y1 - 0.5) - yw0;
+    const desvio = Math.max(...u.map((v, k) => { const t = (ys[k] - yw0) / hh; return Math.abs(v - 6 * mean * t * (1 - t)); })) / mean;
+    assert.ok(Math.abs(Math.max(...u) / mean - 1.5) < 0.03, `u_centro/u_médio = ${Math.max(...u) / mean} (teórico 1,5)`);
+    assert.ok(desvio < 0.03, `desvio do perfil parabólico = ${desvio * 100}%`);
+});
