@@ -50,3 +50,29 @@ export async function aguardarLayoutEstavel(page, quadrosEstaveis = 6) {
         }
     }, quadrosEstaveis);
 }
+
+// Gestos de alto nível sobre o canvas, em coordenadas de GRADE. Cada gesto espera o layout
+// estabilizar e converte para coordenadas de tela no momento de usar.
+export function gestos(page) {
+    // Mira no CENTRO da célula: o canto exato cai na célula vizinha por arredondamento.
+    const pt = (gx, gy) => page.evaluate(([x, y]) => {
+        const a = window.__app, c = a.gridToCanvas(x, y), r = a.canvas.getBoundingClientRect();
+        const meio = a.pxPerSquare * a.zoom / 2;
+        return { x: r.left + (c.x + meio) * r.width / a.canvas.width, y: r.top + (c.y + meio) * r.height / a.canvas.height };
+    }, [gx, gy]);
+    const drag = async (a, b) => {
+        await aguardarLayoutEstavel(page);
+        const p = await pt(...a);
+        await page.mouse.move(p.x, p.y); await page.mouse.down();
+        const m = await pt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+        await page.mouse.move(m.x, m.y, { steps: 3 });
+        const q = await pt(...b);
+        await page.mouse.move(q.x, q.y, { steps: 3 }); await page.mouse.up();
+    };
+    const click = async (a) => { await aguardarLayoutEstavel(page); const p = await pt(...a); await page.mouse.click(p.x, p.y); };
+    const ferramenta = (n) => page.click(`.tool-button[data-tool="${n}"]`);
+    const tipo = (n) => page.click(`.paint-type-button[data-paint-type="${n}"]`);
+    const linha = async (t, a, b) => { await ferramenta('line'); await tipo(t); await drag(a, b); };
+    const formas = () => page.evaluate(() => window.__app.shapes.map(s => ({ ...s })));
+    return { pt, drag, click, ferramenta, tipo, linha, formas };
+}
