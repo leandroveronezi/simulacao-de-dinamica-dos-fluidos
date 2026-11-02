@@ -84,6 +84,13 @@ comportamento for intencional: `UPDATE_SNAPSHOT=1 npm run test:ui`.
 - **Passos por frame** (1 a 40): equilíbrio entre velocidade aparente e custo.
 - **Tamanho da grade:** por padrão acompanha a janela; ajustável no painel Simulação.
 
+**Unidades:** o solver usa unidades de rede (1 célula = 1 de comprimento, 1 passo = 1 de tempo),
+não metros e segundos. Para reproduzir um caso real, iguale o **número de Reynolds**
+`Re = U·D / ν` (U = velocidade do fluxo, D = tamanho do obstáculo em células, ν = viscosidade).
+Exemplo validado nos testes: um cilindro de 16 células com `U = 0,08` e `ν = 0,0128` tem Re = 100
+e solta vórtices com Strouhal ≈ 0,19, como na literatura. Mantenha `U` abaixo de ~0,1: acima
+disso o fluido deixa de ser aproximadamente incompressível e o erro cresce.
+
 **Visualizações:** Densidade (pressão), Velocidade X, Velocidade Y, Módulo da velocidade e
 Rotação (curl, que mostra vórtices bem), além de traçadores, setas de velocidade e de força.
 

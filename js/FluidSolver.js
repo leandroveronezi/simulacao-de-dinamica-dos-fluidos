@@ -728,8 +728,16 @@ export class FluidSolver {
             let nX = dx / 2,
                 nY = dy / 2;
             for (let t = 0; t < FluidSolver.N_TRACERS; t++) {
-                this.tracerX[t] = nX;
-                this.tracerY[t] = nY;
+                // Um ponto da grade que cai dentro de um obstáculo vai para a célula livre mais
+                // próxima: traçador nenhum deve nascer em sólido.
+                const livre = this._nearestFreePoint(nX, nY);
+                if (livre) {
+                    this.tracerX[t] = livre.x;
+                    this.tracerY[t] = livre.y;
+                } else {
+                    this.tracerX[t] = 0;
+                    this.tracerY[t] = this._randomFreeEntryY();
+                }
                 nX += dx;
                 if (nX > this.xdim) {
                     nX = dx / 2;
@@ -737,6 +745,54 @@ export class FluidSolver {
                 }
             }
         }
+    }
+
+    /**
+     * @private
+     * @description `true` se o ponto (x, y) está dentro do domínio e numa célula que NÃO é
+     * Barreira nem Rotor — onde um traçador pode existir.
+     */
+    _isFreeForTracer(x, y) {
+        const cx = Math.floor(x), cy = Math.floor(y);
+        if (cx < 0 || cx >= this.xdim || cy < 0 || cy >= this.ydim) return false;
+        const t = this.cellType[cx + cy * this.xdim];
+        return t !== FluidSolver.CELL_TYPE.BARRIER && t !== FluidSolver.CELL_TYPE.ROTOR;
+    }
+
+    /**
+     * @private
+     * @description O ponto livre mais próximo de (x, y): o próprio ponto se já está livre; senão
+     * procura em anéis crescentes (até ~8 células). `null` se não houver nenhum por perto.
+     */
+    _nearestFreePoint(x, y) {
+        if (this._isFreeForTracer(x, y)) return { x, y };
+        for (let r = 1; r <= 8; r++) {
+            for (let k = 0; k < 16; k++) {
+                const a = (k / 16) * 2 * Math.PI;
+                const nx = x + Math.cos(a) * r, ny = y + Math.sin(a) * r;
+                if (this._isFreeForTracer(nx, ny)) return { x: nx, y: ny };
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @private
+     * @description Altura (y) sorteada para reentrar um traçador pela borda esquerda, evitando
+     * células sólidas na coluna de entrada. Se a coluna inteira estiver bloqueada, devolve um y
+     * qualquer (o traçador será reciclado de novo no passo seguinte).
+     */
+    _randomFreeEntryY() {
+        for (let k = 0; k < 24; k++) {
+            const y = Math.random() * this.ydim;
+            if (this._isFreeForTracer(0, y)) return y;
+        }
+        // Coluna quase toda bloqueada: o sorteio falhou, então escolhe entre as células livres
+        // de fato (varredura, só neste caso raro).
+        const livres = [];
+        for (let y = 0; y < this.ydim; y++) if (this._isFreeForTracer(0, y)) livres.push(y);
+        if (livres.length === 0) return Math.random() * this.ydim;
+        return livres[Math.floor(Math.random() * livres.length)] + Math.random();
     }
 
     initDyeTracers() {
@@ -1359,6 +1415,19 @@ export class FluidSolver {
     moveTracers() {
         if (!this.tracerX) return;
         for (let t = 0; t < FluidSolver.N_TRACERS; t++) {
+            // Um traçador cuja célula ATUAL já é sólida (nasceu dentro de um obstáculo desenhado
+            // antes de ligá-los, ou o Rotor passou por cima dele) não tem como deslizar para
+            // fora; recicla na hora em vez de esperar TRACER_MAX_STUCK_STEPS passos parado ali.
+            const cx = Math.floor(this.tracerX[t]), cy = Math.floor(this.tracerY[t]);
+            if (cx >= 0 && cx < this.xdim && cy >= 0 && cy < this.ydim) {
+                const ct = this.cellType[cx + cy * this.xdim];
+                if (ct === FluidSolver.CELL_TYPE.BARRIER || ct === FluidSolver.CELL_TYPE.ROTOR) {
+                    this.tracerX[t] = 0;
+                    this.tracerY[t] = this._randomFreeEntryY();
+                    this.tracerStuck[t] = 0;
+                    continue;
+                }
+            }
             const ux_interp = this._bilinearInterpolate(this.tracerX[t], this.tracerY[t], this.ux);
             const uy_interp = this._bilinearInterpolate(this.tracerX[t], this.tracerY[t], this.uy);
             if (!isFinite(ux_interp) || !isFinite(uy_interp)) continue;
@@ -1370,7 +1439,7 @@ export class FluidSolver {
 
             if (newX > this.xdim - 1 || cellAtNew === FluidSolver.CELL_TYPE.SINK) {
                 this.tracerX[t] = 0;
-                this.tracerY[t] = Math.random() * this.ydim;
+                this.tracerY[t] = this._randomFreeEntryY();
                 continue;
             }
             if (cellAtNew === FluidSolver.CELL_TYPE.BARRIER || cellAtNew === FluidSolver.CELL_TYPE.ROTOR) {
@@ -1383,7 +1452,7 @@ export class FluidSolver {
                     // Canto fechado dos dois lados ou estagnação: recicla na entrada, mesma
                     // regra já usada pela Saída logo acima.
                     this.tracerX[t] = 0;
-                    this.tracerY[t] = Math.random() * this.ydim;
+                    this.tracerY[t] = this._randomFreeEntryY();
                     this.tracerStuck[t] = 0;
                 }
                 continue;
@@ -1577,6 +1646,54 @@ export class FluidSolver {
     }
 
     /**
+     * @private
+     * @description Velocidade média da "parede" dos Rotores que o disco de raio `radius` em (x, y)
+     * toca, ou `null` se não toca nenhuma célula de Rotor. É a velocidade que uma partícula
+     * ganha ao ser batida por uma pá em movimento.
+     */
+    _rotorWallVelocityNear(x, y, radius) {
+        const xa = Math.max(0, Math.floor(x - radius)), xb = Math.min(this.xdim - 1, Math.floor(x + radius));
+        const ya = Math.max(0, Math.floor(y - radius)), yb = Math.min(this.ydim - 1, Math.floor(y + radius));
+        let sx = 0, sy = 0, n = 0;
+        for (let cy = ya; cy <= yb; cy++) {
+            for (let cx = xa; cx <= xb; cx++) {
+                const i = cx + cy * this.xdim;
+                if (this.cellType[i] !== FluidSolver.CELL_TYPE.ROTOR) continue;
+                sx += this.rotorWallVx[i];
+                sy += this.rotorWallVy[i];
+                n++;
+            }
+        }
+        return n > 0 ? { vx: sx / n, vy: sy / n } : null;
+    }
+
+    /**
+     * @private
+     * @description Se o centro da partícula caiu dentro de uma célula de Rotor (a pá a alcançou),
+     * move-a para o ponto livre mais próximo e dá a ela a velocidade da pá naquela célula.
+     */
+    _ejectParticleFromRotor(p) {
+        const cx = Math.floor(p.x), cy = Math.floor(p.y);
+        if (cx < 0 || cx >= this.xdim || cy < 0 || cy >= this.ydim) return;
+        const i = cx + cy * this.xdim;
+        if (this.cellType[i] !== FluidSolver.CELL_TYPE.ROTOR) return;
+        const wvx = this.rotorWallVx[i], wvy = this.rotorWallVy[i];
+        for (let r = 0.75; r <= 6; r += 0.75) {
+            for (let k = 0; k < 16; k++) {
+                const a = (k / 16) * 2 * Math.PI;
+                const nx = p.x + Math.cos(a) * r, ny = p.y + Math.sin(a) * r;
+                if (nx < 0 || nx > this.xdim - 1 || ny < 0 || ny > this.ydim - 1) continue;
+                if (this._isSolidForParticle(nx, ny, p.radius)) continue;
+                p.x = nx;
+                p.y = ny;
+                p.vx = wvx;
+                p.vy = wvy;
+                return;
+            }
+        }
+    }
+
+    /**
      * @description Atualiza a física de cada partícula ativa: interpola a velocidade do fluido
      * no ponto dela (mesma interpolação bilinear das setas/fumaça), soma um arrasto proporcional
      * à diferença de velocidade fluido↔partícula (mais forte pra peso leve — segue o vento de
@@ -1595,6 +1712,10 @@ export class FluidSolver {
                 this._deactivateParticle(p);
                 continue;
             }
+            // Uma pá que alcança a partícula a deixa com o centro DENTRO do Rotor; sem tratar isso
+            // ela ficava presa no sólido, refletindo para sempre. Ejeta para a célula livre mais
+            // próxima, levando a velocidade da pá (o empurrão que uma pá de verdade daria).
+            if (this.rotatingBodies.length > 0) this._ejectParticleFromRotor(p);
             const phys = FluidSolver.particlePhysicsFromWeight(p.weight);
             p.vx += phys.drag * (fluidUx - p.vx);
             p.vy += phys.drag * (fluidUy - p.vy) - phys.gravity;
@@ -1618,12 +1739,18 @@ export class FluidSolver {
             // Resolve colisão eixo a eixo (mesmo espírito de `_slideAlongSolid`, mas refletindo
             // em vez de deslizar — uma partícula tem massa/inércia de verdade, não é um traço
             // sem peso que só precisa contornar a parede).
+            // Reflexão relativa à parede: num Rotor em movimento a parede tem velocidade própria
+            // (`rotorWallVx/Vy`), e é ela que a partícula ganha ao ser batida pela pá. Em parede
+            // parada `wall` é zero e a conta é a mesma de sempre.
+            const wall = this.rotatingBodies.length > 0 ? this._rotorWallVelocityNear(newX, newY, p.radius) : null;
+            const wvx = wall ? wall.vx : 0, wvy = wall ? wall.vy : 0;
+            const refletir = (v, w) => (Math.abs(v - w) < FluidSolver.PARTICLE_REST_EPS ? w : w - (v - w) * FluidSolver.PARTICLE_RESTITUTION);
             if (this._isSolidForParticle(newX, p.y, p.radius)) {
-                p.vx = Math.abs(p.vx) < FluidSolver.PARTICLE_REST_EPS ? 0 : -p.vx * FluidSolver.PARTICLE_RESTITUTION;
+                p.vx = refletir(p.vx, wvx);
                 newX = p.x;
             }
             if (this._isSolidForParticle(p.x, newY, p.radius)) {
-                p.vy = Math.abs(p.vy) < FluidSolver.PARTICLE_REST_EPS ? 0 : -p.vy * FluidSolver.PARTICLE_RESTITUTION;
+                p.vy = refletir(p.vy, wvy);
                 newY = p.y;
             }
             // Rede de segurança contra "corte de esquina": os dois testes acima são POR EIXO
@@ -1637,8 +1764,8 @@ export class FluidSolver {
             if (this._isSolidForParticle(newX, newY, p.radius)) {
                 newX = p.x;
                 newY = p.y;
-                p.vx = Math.abs(p.vx) < FluidSolver.PARTICLE_REST_EPS ? 0 : -p.vx * FluidSolver.PARTICLE_RESTITUTION;
-                p.vy = Math.abs(p.vy) < FluidSolver.PARTICLE_REST_EPS ? 0 : -p.vy * FluidSolver.PARTICLE_RESTITUTION;
+                p.vx = refletir(p.vx, wvx);
+                p.vy = refletir(p.vy, wvy);
             }
             p.x = newX;
             p.y = newY;

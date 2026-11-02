@@ -122,3 +122,61 @@ test('Rotor com motor ligado gira mesmo sem vento, e desligado não', () => {
     assert.ok(Math.abs(omegaFinal(1)) > 1e-3, 'motor ligado não girou');
     assert.ok(Math.abs(omegaFinal(0)) < 1e-6, 'motor desligado girou sozinho');
 });
+
+test('traçador que nasce dentro de um obstáculo é reciclado no primeiro passo', () => {
+    // Fluido em repouso: o traçador não se move sozinho, então só a regra de reciclagem o tira
+    // do sólido (com vento ele "sairia" empurrado, e o teste não distinguiria nada).
+    const s = new FluidSolver(160, 80); s.boundaryMode = 'open'; s.initFluid(0); s.initTracers(true);
+    for (let y = 30; y < 50; y++) for (let x = 60; x < 66; x++) s.setCell(x, y, CT.BARRIER);
+    const dentro = () => { let n = 0; for (let t = 0; t < s.tracerX.length; t++) if (s._isSolidAtPoint(s.tracerX[t], s.tracerY[t])) n++; return n; };
+    assert.ok(dentro() > 0, 'o cenário precisa ter traçadores dentro do sólido');
+    for (let i = 0; i < 3; i++) s.step({ u0: 0, viscosity: VISC, moveTracers: true });
+    assert.equal(dentro(), 0);
+});
+
+function motorComPartículas() {
+    const s = new FluidSolver(80, 60); s.boundaryMode = 'open'; s.initFluid(0);
+    const cells = []; for (let y = 20; y <= 40; y++) cells.push({ x: 40, y });
+    s.addRotatingBody(cells, null, { motorDirection: 1, motorSpeed: 1, damping: 0.02 }); s.stampRotatingBodiesOntoGrid();
+    for (const [x, y] of [[44.5, 38.5], [47.5, 30.5], [36.5, 25.5], [50.5, 30.5]]) s.addParticle(x, y, 0.5, 'ball');
+    return s;
+}
+
+test('pá em movimento nunca deixa uma partícula com o centro dentro do Rotor por mais de um passo', () => {
+    const s = motorComPartículas();
+    let seguidos = 0, maxSeguidos = 0;
+    for (let i = 0; i < 4000; i++) {
+        s.step({ u0: 0, viscosity: VISC, moveTracers: false });
+        const dentro = s.particles.some(p => p.x >= 0 && s.cellType[Math.floor(p.x) + Math.floor(p.y) * s.xdim] === CT.ROTOR);
+        seguidos = dentro ? seguidos + 1 : 0; maxSeguidos = Math.max(maxSeguidos, seguidos);
+    }
+    assert.ok(maxSeguidos <= 1, `partícula presa dentro do Rotor por ${maxSeguidos} passos seguidos`);
+});
+
+test('a pá empurra a partícula: ela ganha velocidade da própria pá, não só do fluido', () => {
+    const s = new FluidSolver(80, 60); s.boundaryMode = 'open'; s.initFluid(0);
+    const cells = []; for (let y = 20; y <= 40; y++) cells.push({ x: 40, y });
+    s.addRotatingBody(cells, null, { motorDirection: 1, motorSpeed: 1, damping: 0.02 }); s.stampRotatingBodiesOntoGrid();
+    // Fluido congelado em zero a cada passo: só a colisão com a pá pode dar velocidade à partícula.
+    s.addParticle(40.5, 38.5, 1, 'ball');
+    let vmax = 0;
+    for (let i = 0; i < 1500; i++) {
+        s.step({ u0: 0, viscosity: VISC, moveTracers: false });
+        s.ux.fill(0); s.uy.fill(0);
+        const p = s.particles.find(q => q.x >= 0);
+        if (p) vmax = Math.max(vmax, Math.abs(p.vx));
+    }
+    assert.ok(vmax > 0.02, `a partícula nunca passou de ${vmax} de velocidade horizontal`);
+});
+
+test('traçadores NÃO nascem em sólidos: nem na criação, nem ao reentrar pela borda', () => {
+    const s = new FluidSolver(160, 80); s.boundaryMode = 'open'; s.initFluid(0);
+    for (let y = 30; y < 50; y++) for (let x = 60; x < 66; x++) s.setCell(x, y, CT.BARRIER);
+    for (let k = 0; k < 25; k++) { s.setCell(100 + k, 10 + k, CT.BARRIER); s.setCell(101 + k, 10 + k, CT.BARRIER); }
+    const dentro = () => { let n = 0; for (let t = 0; t < s.tracerX.length; t++) if (s._isSolidAtPoint(s.tracerX[t], s.tracerY[t])) n++; return n; };
+    s.initTracers(true);
+    assert.equal(dentro(), 0, 'nasceu traçador dentro de sólido na criação');
+    // Coluna de entrada quase toda bloqueada: o y sorteado deve cair no trecho livre.
+    for (let y = 0; y < 80; y++) if (y < 20 || y >= 30) s.setCell(0, y, CT.BARRIER);
+    for (let i = 0; i < 200; i++) assert.ok(s._isFreeForTracer(0, s._randomFreeEntryY()), 'reentrou em sólido');
+});
