@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { chromium } from 'playwright-core';
-import { ROOT, serve } from './helpers.mjs';
+import { ROOT, serve, aguardarLayoutEstavel } from './helpers.mjs';
 
 const SNAP = path.join(ROOT, 'tests/snapshots/ui-config.json');
 
@@ -33,12 +33,15 @@ test('roteiro de desenho: sem erros no console e estado igual ao instantâneo', 
             return { x: r.left + c.x * r.width / a.canvas.width, y: r.top + c.y * r.height / a.canvas.height };
         }, [gx, gy]);
         const drag = async (a, b) => {
-            const p = await pt(...a), q = await pt(...b);
+            await aguardarLayoutEstavel(page);
+            const p = await pt(...a);
             await page.mouse.move(p.x, p.y); await page.mouse.down();
-            await page.mouse.move((p.x + q.x) / 2, (p.y + q.y) / 2, { steps: 3 });
+            const meio = await pt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+            await page.mouse.move(meio.x, meio.y, { steps: 3 });
+            const q = await pt(...b);
             await page.mouse.move(q.x, q.y, { steps: 3 }); await page.mouse.up();
         };
-        const click = async (a) => { const p = await pt(...a); await page.mouse.click(p.x, p.y); };
+        const click = async (a) => { await aguardarLayoutEstavel(page); const p = await pt(...a); await page.mouse.click(p.x, p.y); };
         const tool = (n) => page.click(`.tool-button[data-tool="${n}"]`);
         const type = (n) => page.click(`.paint-type-button[data-paint-type="${n}"]`);
 

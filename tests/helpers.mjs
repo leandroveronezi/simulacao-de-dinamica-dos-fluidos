@@ -34,3 +34,19 @@ export async function abrirApp({ limparStorage = true } = {}) {
     const fechar = async () => { await browser.close(); server.close(); };
     return { page, erros, url, fechar };
 }
+
+// Espera o layout do canvas estabilizar (ele é redimensionado de forma assíncrona quando o
+// painel de controle aparece/some). Sem isso, coordenadas de tela calculadas antes de um arraste
+// podem apontar para outra célula no momento do evento, e o resultado depende de timing/carga.
+export async function aguardarLayoutEstavel(page, quadrosEstaveis = 6) {
+    await page.evaluate(async (n) => {
+        const medir = () => { const r = window.__app.canvas.getBoundingClientRect(); return `${r.left}|${r.top}|${r.width}|${r.height}|${window.__app.canvas.width}|${window.__app.canvas.height}`; };
+        let anterior = medir(), iguais = 0;
+        while (iguais < n) {
+            await new Promise(r => requestAnimationFrame(r));
+            const atual = medir();
+            iguais = atual === anterior ? iguais + 1 : 0;
+            anterior = atual;
+        }
+    }, quadrosEstaveis);
+}
