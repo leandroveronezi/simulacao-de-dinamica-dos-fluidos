@@ -2,8 +2,8 @@
 // ajuste (snap) de pontas e criação de formas. Extraído de FluidSimulationApp.js; os métodos são
 // anexados ao protótipo do app por applyMixin, então `this` é a instância do app.
 
-import { FluidSolver } from '../FluidSolver.js?v=20261102b';
-import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102b';
+import { FluidSolver } from '../FluidSolver.js?v=20261102c';
+import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102c';
 
 export class PointerInput {
     /**

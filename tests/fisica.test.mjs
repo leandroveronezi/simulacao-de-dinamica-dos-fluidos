@@ -233,3 +233,15 @@ test('Poiseuille: entre duas paredes sólidas o perfil é parabólico (não-desl
     assert.ok(Math.abs(Math.max(...u) / mean - 1.5) < 0.03, `u_centro/u_médio = ${Math.max(...u) / mean} (teórico 1,5)`);
     assert.ok(desvio < 0.03, `desvio do perfil parabólico = ${desvio * 100}%`);
 });
+
+test('o motor chega à velocidade-alvo (ação integral), mesmo com amortecimento e arrasto', () => {
+    for (const [L, massa] of [[5, 1], [9, 1], [17, 10]]) {
+        const s = new FluidSolver(80, 50); s.boundaryMode = 'open'; s.initFluid(0);
+        const cells = []; for (let y = 25 - (L >> 1); y <= 25 + (L >> 1); y++) cells.push({ x: 40, y });
+        s.addRotatingBody(cells, null, { motorDirection: 1, motorSpeed: 1, massMultiplier: massa, damping: 0.05 }); s.stampRotatingBodiesOntoGrid();
+        const b = s.rotatingBodies[0], alvo = FluidSolver.ROTOR_MAX_TIP_SPEED / b.maxRadius;
+        step(s, 4000);
+        assert.ok(b.omega / alvo > 0.9 && b.omega / alvo <= 1.001, `L=${L}: ${(b.omega / alvo).toFixed(3)} do alvo`);
+        assert.ok(s.checkStability());
+    }
+});

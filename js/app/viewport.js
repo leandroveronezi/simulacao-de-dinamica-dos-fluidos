@@ -2,8 +2,8 @@
 // grade. Extraído de FluidSimulationApp.js; os métodos são anexados ao protótipo do app por
 // applyMixin, então `this` é a instância do app.
 
-import { Renderer } from '../Renderer.js?v=20261102b';
-import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102b';
+import { Renderer } from '../Renderer.js?v=20261102c';
+import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102c';
 
 export class Viewport {
     /**

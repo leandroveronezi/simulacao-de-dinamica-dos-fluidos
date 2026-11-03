@@ -3,7 +3,7 @@
 // "Simulação Instável!" e a confirmação de reset NÃO são erros: são diálogos normais do app.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { abrirApp, gestos } from './helpers.mjs';
+import { abrirApp, gestos, rodar } from './helpers.mjs';
 
 async function estresse(semente, nAcoes) {
     let seed = semente;
@@ -24,7 +24,7 @@ async function estresse(semente, nAcoes) {
         async () => { log.push('refazer'); await page.keyboard.press('Control+y'); },
         async () => { log.push('delete'); await page.keyboard.press('Delete'); },
         async () => { log.push('esc'); await page.keyboard.press('Escape'); },
-        async () => { log.push('rodar/pausar'); await page.click('#startButton'); await page.waitForTimeout(150); await page.click('#startButton'); },
+        async () => { log.push('rodar/pausar'); await rodar(page, 40); },
         async () => { log.push('passo'); await page.click('#stepButton'); },
         async () => { log.push('visualização'); await page.selectOption('#plotSelect', { index: Math.floor(rnd() * 5) }); },
         async () => { log.push('modo'); await page.selectOption('#boundaryModeSelect', pick(['channel', 'open'])); },

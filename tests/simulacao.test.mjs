@@ -2,7 +2,7 @@
 // exibição, modos de contorno e fluidos reais, sem erro de console e sem instabilidade.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { abrirApp, gestos } from './helpers.mjs';
+import { abrirApp, gestos, rodar } from './helpers.mjs';
 
 async function cenaCompleta(page, g) {
     await g.linha('barrier', [40, 50], [70, 70]);
@@ -26,7 +26,7 @@ test('todas as visualizações e opções de exibição rodam sem erro, em Canal
             assert.ok(nVis >= 5, `visualizações: ${nVis}`);
             for (let i = 0; i < nVis; i++) {
                 await page.selectOption('#plotSelect', { index: i });
-                await page.click('#startButton'); await page.waitForTimeout(250); await page.click('#startButton');
+                await rodar(page, 70);
                 await page.click('#stepButton');
             }
             await page.fill('#contrastSlider', '6'); await page.fill('#contrastSlider', '-6');
@@ -47,7 +47,7 @@ test('cada fluido real, calibrado para 0,1 m/s, mantém a simulação estável',
             await page.fill('#targetSpeedInput', '0.1');
             await page.click('#calibrateButton');
             await page.evaluate(() => Swal.close()); // aviso de "calibração no limite", se houver
-            await page.click('#startButton'); await page.waitForTimeout(300); await page.click('#startButton');
+            await rodar(page, 80);
             assert.ok(await page.evaluate(() => window.__app.solver.checkStability()), `instável com ${f}`);
         }
         assert.deepEqual(erros, []);

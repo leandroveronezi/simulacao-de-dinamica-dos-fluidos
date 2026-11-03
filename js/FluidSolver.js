@@ -95,6 +95,13 @@ export class FluidSolver {
     // é linear em omega, ele entra implicitamente junto com o arrasto, então valores altos de
     // ganho continuam estáveis.
     static ROTOR_MOTOR_GAIN = 0.5;
+    // Quanto a densidade das bordas abertas acompanha a do vizinho (0 = presa em 1, 1 = cópia).
+    static OPEN_BOUNDARY_PRESSURE_RELAX = 0.25;
+    // Ação integral do motor (por passo): o controle só proporcional estaciona abaixo do alvo
+    // (arrasto do fluido, amortecimento e atrito pedem torque contínuo, que só existe com erro).
+    // O alvo efetivo cresce `ki·erro` por passo até a velocidade chegar de fato ao alvo. Pequeno
+    // de propósito: a aceleração continua suave e o laço com o fluido continua estável.
+    static ROTOR_MOTOR_INTEGRAL = 0.005;
     // Atrito seco (de Coulomb) do eixo, em rad/passo² de desaceleração constante: todo eixo real
     // tem algum, e é ele que faz um rotor solto PARAR de vez. Sem ele, só a viscosidade do fluido
     // dissipa o giro, por difusão, e o rotor ficava derivando por dezenas de milhares de passos.
@@ -620,10 +627,18 @@ export class FluidSolver {
             // inverteria o sinal de omega a cada passo em vez de puxá-lo para o alvo.
             const motorGain = body.motorDirection ? FluidSolver.ROTOR_MOTOR_GAIN : 0;
             const motorOmega = body.motorDirection * (body.motorSpeed ?? 0.5) * omegaMax;
+            // Alvo efetivo do motor = alvo pedido + correção integral (anti-windup: nunca passa
+            // do teto de velocidade). Motor desligado zera a memória.
+            if (body.motorDirection) {
+                const erro = motorOmega - body.omega;
+                body.motorIntegral = Math.max(-5 * omegaMax, Math.min(5 * omegaMax, (body.motorIntegral || 0) + FluidSolver.ROTOR_MOTOR_INTEGRAL * erro));
+            } else {
+                body.motorIntegral = 0;
+            }
             const omegaTarget = body.omega
                 + body.torqueFiltered / effectiveInertia
                 - body.stiffness * (body.angle - body.restingAngle)
-                + motorGain * motorOmega;
+                + motorGain * (motorOmega + body.motorIntegral);
             body.omega = omegaTarget / (1 + body.damping + dragCoeff / effectiveInertia + motorGain);
             body.omega = Math.max(-omegaMax, Math.min(omegaMax, body.omega));
             // Atrito seco: reduz |omega| de um valor constante e nunca inverte o sinal.
@@ -900,29 +915,35 @@ export class FluidSolver {
 
     /**
      * @private
-     * @description Modo 'open': copia as distribuições do vizinho interno em todas as 4
-     * bordas (gradiente zero / saída livre), sem impor nenhuma velocidade de entrada.
+     * @description Modo 'open': saída livre nas 4 bordas, sem impor velocidade de entrada. Cada
+     * célula de borda recebe o equilíbrio com a VELOCIDADE do vizinho interno (o fluxo sai sem
+     * refletir) e a densidade `1 + K·(ρ_vizinho − 1)`, com K = `OPEN_BOUNDARY_PRESSURE_RELAX`.
+     * Copiar o vizinho por inteiro (K = 1, "gradiente zero") deixa a pressão do recinto à deriva
+     * e instabiliza com Entrada + Saída em cenas pequenas, com viscosidade baixa ou só com uma
+     * Entrada em ~7000 passos (medido). Prender a densidade em 1 (K = 0) estabiliza esses casos,
+     * mas faz uma Saída grande puxar o fluido forte demais. K = 0,25 estabilizou todos os cenários medidos (0,5 e 0,75 falharam numa Saída grande).
      */
     _applyOpenBoundaries() {
-        const copyCell = (i, iFrom) => {
-            this.n0[i] = this.n0[iFrom] || 0;
-            this.nN[i] = this.nN[iFrom] || 0;
-            this.nS[i] = this.nS[iFrom] || 0;
-            this.nE[i] = this.nE[iFrom] || 0;
-            this.nW[i] = this.nW[iFrom] || 0;
-            this.nNE[i] = this.nNE[iFrom] || 0;
-            this.nSE[i] = this.nSE[iFrom] || 0;
-            this.nNW[i] = this.nNW[iFrom] || 0;
-            this.nSW[i] = this.nSW[iFrom] || 0;
+        const xd = this.xdim, yd = this.ydim, K = FluidSolver.OPEN_BOUNDARY_PRESSURE_RELAX;
+        const maxU = FluidSolver.MAX_SAFE_SPEED;
+        const aplica = (i, j) => {
+            const r = this.n0[j] + this.nN[j] + this.nS[j] + this.nE[j] + this.nW[j]
+                + this.nNE[j] + this.nSE[j] + this.nNW[j] + this.nSW[j];
+            let ux = (this.nE[j] + this.nNE[j] + this.nSE[j] - this.nW[j] - this.nNW[j] - this.nSW[j]) / r;
+            let uy = (this.nN[j] + this.nNE[j] + this.nNW[j] - this.nS[j] - this.nSE[j] - this.nSW[j]) / r;
+            if (!Number.isFinite(ux) || !Number.isFinite(uy) || !(r > 0)) { ux = 0; uy = 0; }
+            const m = Math.hypot(ux, uy);
+            if (m > maxU) { ux *= maxU / m; uy *= maxU / m; }
+            const rho = Number.isFinite(r) && r > 0 ? 1 + K * (r - 1) : 1;
+            this.setEquilibrium(i % xd, (i / xd) | 0, ux, uy, rho);
         };
-
-        for (let y = 0; y < this.ydim; y++) {
-            copyCell(y * this.xdim, 1 + y * this.xdim);
-            copyCell(this.xdim - 1 + y * this.xdim, this.xdim - 2 + y * this.xdim);
+        for (let y = 0; y < yd; y++) {
+            aplica(y * xd, 1 + y * xd);
+            aplica(xd - 1 + y * xd, xd - 2 + y * xd);
         }
-        for (let x = 0; x < this.xdim; x++) {
-            copyCell(x, x + this.xdim);
-            copyCell(x + (this.ydim - 1) * this.xdim, x + (this.ydim - 2) * this.xdim);
+        for (let x = 0; x < xd; x++) {
+            aplica(x, x + xd);
+            aplica(x + (yd - 1) * xd, x + (yd - 2) * xd);
         }
     }
 
@@ -1704,12 +1725,13 @@ export class FluidSolver {
             maxX = x + radius,
             minY = y - radius,
             maxY = y + radius;
-        if (minX < 0 || minY < 0 || maxY >= this.ydim) return true;
+        const aberto = this.boundaryMode === 'open'; // bordas abertas: não são parede
+        if (!aberto && (minX < 0 || minY < 0 || maxY >= this.ydim)) return true;
         if (minX >= this.xdim) return false;
-        const x0 = Math.floor(minX),
+        const x0 = Math.max(0, Math.floor(minX)),
             x1 = Math.min(Math.floor(maxX), this.xdim - 1),
-            y0 = Math.floor(minY),
-            y1 = Math.floor(maxY);
+            y0 = Math.max(0, Math.floor(minY)),
+            y1 = Math.min(Math.floor(maxY), this.ydim - 1);
         for (let cy = y0; cy <= y1; cy++) {
             for (let cx = x0; cx <= x1; cx++) {
                 const i = cx + cy * this.xdim;
@@ -1777,7 +1799,7 @@ export class FluidSolver {
      * velocidade/posição, e resolve colisão eixo a eixo contra sólidos (Barreira/Rotor/bordas do
      * domínio/Grade com furo pequeno demais) refletindo a velocidade nesse eixo com perda de
      * energia (`PARTICLE_RESTITUTION`) — bugs.md #32, "pode bater em uma parede, pode retornar".
-     * Sai da cena (recicla, como um traçador) ao tocar uma Saída ou ao passar da borda direita.
+     * Sai da cena ao tocar uma Saída ou ao passar da borda direita (no Mundo Aberto, de qualquer borda).
      */
     _updateParticles() {
         for (const p of this.particles) {
@@ -1814,7 +1836,10 @@ export class FluidSolver {
             const rx = Math.floor(newX),
                 ry = Math.floor(newY);
             const cellAtNew = (rx >= 0 && rx < this.xdim && ry >= 0 && ry < this.ydim) ? this.cellType[rx + ry * this.xdim] : -1;
-            if (newX > this.xdim - 1 || cellAtNew === FluidSolver.CELL_TYPE.SINK) {
+            // No Mundo Aberto as 4 bordas são saída (como para os traçadores); no Canal só a
+            // direita, e o topo, o fundo e a esquerda são paredes.
+            const saiuPeloAberto = this.boundaryMode === 'open' && (newX < 0 || newY < 0 || newY > this.ydim - 1);
+            if (newX > this.xdim - 1 || saiuPeloAberto || cellAtNew === FluidSolver.CELL_TYPE.SINK) {
                 this._deactivateParticle(p);
                 continue;
             }

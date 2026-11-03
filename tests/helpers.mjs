@@ -76,3 +76,9 @@ export function gestos(page) {
     const formas = () => page.evaluate(() => window.__app.shapes.map(s => ({ ...s })));
     return { pt, drag, click, ferramenta, tipo, linha, formas };
 }
+
+/** Roda `passos` passos da simulação de forma determinística (sem depender do relógio). */
+export const rodar = (page, passos) => page.evaluate((n) => {
+    const a = window.__app;
+    for (let i = 0; i < n; i++) a.simulateSingleStep();
+}, passos);

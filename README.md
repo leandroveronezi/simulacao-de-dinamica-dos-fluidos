@@ -58,8 +58,8 @@ comportamento for intencional: `UPDATE_SNAPSHOT=1 npm run test:ui`.
   uma Saída, atravessam a Grade (são menores que qualquer furo) e, no Canal, refletem no topo e
   no fundo. No Mundo Aberto, quem sai do domínio reaparece em outro ponto livre.
 - **Partículas:** cada clique solta um objeto avulso (folha, bolinha ou caixa) com peso
-  ajustável. Eles sofrem vento e gravidade, e quicam em Barreira, Rotor e bordas. Somem ao sair
-  do domínio ou tocar uma Saída (até 300 ao mesmo tempo).
+  ajustável. Eles sofrem vento e gravidade, e quicam em Barreira, Rotor e nas paredes do Canal. Somem ao sair
+  do domínio (no Mundo Aberto, por qualquer borda) ou tocar uma Saída (até 300 ao mesmo tempo).
 - **Ponteiro:** seleciona formas, Rotores, Entradas e fontes de fumaça para editar no painel
   flutuante. Também arrasta o pivô do Rotor e a seta da Entrada.
 - **Seleção:** copiar, recortar, colar, espelhar e girar uma área.
@@ -127,9 +127,14 @@ vizinhas. Densidade e velocidade surgem dos momentos das distribuições.
   somada às distribuições refletidas, então a pá empurra o fluido. A reação sobre o corpo entra
   de forma implícita na equação do movimento, senão o rotor ganharia momento do nada. O torque
   é medido antes dessa correção, para não realimentar. A velocidade angular é limitada para
-  manter a ponta da pá dentro da faixa estável do solver. O eixo tem atrito seco constante
+  manter a ponta da pá dentro da faixa estável do solver. O motor é um controle de velocidade com ação integral, então o slider em 100% chega a ~100% da
+  velocidade-alvo mesmo com amortecimento e arrasto. O eixo tem atrito seco constante
   (`ROTOR_AXLE_FRICTION`), então um rotor solto para de vez em vez de derivar por difusão do
   fluido.
+- **Bordas do Mundo Aberto**: cada célula de borda recebe o equilíbrio com a velocidade do vizinho
+  interno e a densidade `1 + 0,25·(ρ_vizinho − 1)`. Só copiar o vizinho deixava a pressão à deriva
+  e instabilizava cenas pequenas com Entrada e Saída; prender a densidade em 1 fazia uma Saída
+  grande puxar forte demais.
 - **Saída** multiplica as 9 distribuições por `1 − α`: a densidade cai e a velocidade fica
   igual, então o ralo não vira obstáculo. Um piso de densidade (`SINK_RHO_FLOOR = 0,6`) evita
   esvaziar recintos selados. A sucção também cai quando a velocidade de entrada passa de 0,08

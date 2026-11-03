@@ -2,11 +2,11 @@
 // (m/s, ms, cm) nos controles e no sensor. Extraído no mesmo molde dos outros arquivos de
 // js/app/: os métodos são anexados ao protótipo do app por applyMixin, `this` é o app.
 
-import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102b';
+import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102c';
 import {
     FLUIDOS, FLUIDO_PADRAO, CELULA_PADRAO_MM, CELULA_MIN_MM, CELULA_MAX_MM, calcularEscala, calibrar,
     formatarVelocidade, formatarTempo, formatarComprimento,
-} from '../Unidades.js?v=20261102b';
+} from '../Unidades.js?v=20261102c';
 
 export class PhysicalScale {
     /**

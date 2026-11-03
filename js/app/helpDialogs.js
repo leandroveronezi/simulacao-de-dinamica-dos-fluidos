@@ -1,7 +1,7 @@
 // Diálogos de ajuda (botões "?") do FluidSimulationApp. Extraído de FluidSimulationApp.js; os
 // métodos são anexados ao protótipo do app por applyMixin, então `this` é a instância do app.
 
-import { formatarVelocidade, formatarTempo } from '../Unidades.js?v=20261102b';
+import { formatarVelocidade, formatarTempo } from '../Unidades.js?v=20261102c';
 
 export class HelpDialogs {
     _showMeshHoleSizeHelp() {

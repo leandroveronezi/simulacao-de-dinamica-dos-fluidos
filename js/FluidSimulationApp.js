@@ -1,21 +1,21 @@
-import { FluidSolver } from './FluidSolver.js?v=20261102b';
-import { Renderer } from './Renderer.js?v=20261102b';
-import { DEFAULT_LINE_WIDTH } from './PolygonGeometry.js?v=20261102b';
-import { applyMixin } from './app/applyMixin.js?v=20261102b';
-import { PointerInput } from './app/pointerInput.js?v=20261102b';
-import { ShapeDrag } from './app/shapeDrag.js?v=20261102b';
-import { HitTesting } from './app/hitTesting.js?v=20261102b';
-import { ShapeProperties } from './app/shapeProperties.js?v=20261102b';
-import { Rasterization } from './app/rasterization.js?v=20261102b';
-import { ControlPanel } from './app/controlPanel.js?v=20261102b';
-import { GridSize } from './app/gridSize.js?v=20261102b';
-import { UiChrome } from './app/uiChrome.js?v=20261102b';
-import { Viewport } from './app/viewport.js?v=20261102b';
-import { History } from './app/history.js?v=20261102b';
-import { Selection } from './app/selection.js?v=20261102b';
-import { Persistence } from './app/persistence.js?v=20261102b';
-import { HelpDialogs } from './app/helpDialogs.js?v=20261102b';
-import { PhysicalScale } from './app/physicalScale.js?v=20261102b';
+import { FluidSolver } from './FluidSolver.js?v=20261102c';
+import { Renderer } from './Renderer.js?v=20261102c';
+import { DEFAULT_LINE_WIDTH } from './PolygonGeometry.js?v=20261102c';
+import { applyMixin } from './app/applyMixin.js?v=20261102c';
+import { PointerInput } from './app/pointerInput.js?v=20261102c';
+import { ShapeDrag } from './app/shapeDrag.js?v=20261102c';
+import { HitTesting } from './app/hitTesting.js?v=20261102c';
+import { ShapeProperties } from './app/shapeProperties.js?v=20261102c';
+import { Rasterization } from './app/rasterization.js?v=20261102c';
+import { ControlPanel } from './app/controlPanel.js?v=20261102c';
+import { GridSize } from './app/gridSize.js?v=20261102c';
+import { UiChrome } from './app/uiChrome.js?v=20261102c';
+import { Viewport } from './app/viewport.js?v=20261102c';
+import { History } from './app/history.js?v=20261102c';
+import { Selection } from './app/selection.js?v=20261102c';
+import { Persistence } from './app/persistence.js?v=20261102c';
+import { HelpDialogs } from './app/helpDialogs.js?v=20261102c';
+import { PhysicalScale } from './app/physicalScale.js?v=20261102c';
 
 /**
  * @class FluidSimulationApp
@@ -955,27 +955,6 @@ export class FluidSimulationApp {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-    }
-
-    /**
-     * @description Limpa todos os recursos pendentes (timers, observers) para evitar vazamentos de memória.
-     */
-    destroy() {
-        if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
-        }
-        if (this.simulationTimeout) {
-            clearTimeout(this.simulationTimeout);
-            this.simulationTimeout = null;
-        }
-        if (this.resizeTimeout) {
-            clearTimeout(this.resizeTimeout);
-            this.resizeTimeout = null;
-        }
-        if (this.resizeObserver) {
-            this.resizeObserver.disconnect();
-        }
     }
 }
 

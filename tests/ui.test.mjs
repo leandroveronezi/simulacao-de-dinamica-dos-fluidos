@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { chromium } from 'playwright-core';
-import { ROOT, serve, aguardarLayoutEstavel } from './helpers.mjs';
+import { ROOT, serve, aguardarLayoutEstavel, rodar } from './helpers.mjs';
 
 const SNAP = path.join(ROOT, 'tests/snapshots/ui-config.json');
 
@@ -79,7 +79,7 @@ test('roteiro de desenho: sem erros no console e estado igual ao instantâneo', 
         });
 
         // Roda a simulação por um tempo: só exige que continue estável e sem erros.
-        await page.click('#startButton'); await page.waitForTimeout(800); await page.click('#startButton');
+        await rodar(page, 200);
         estado.estavel = await page.evaluate(() => window.__app.solver.checkStability());
         assert.deepEqual(erros, [], 'erros no console/página');
         assert.ok(estado.estavel, 'simulação instável após o roteiro');
