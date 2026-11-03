@@ -78,10 +78,10 @@ test('espelhamento: obstáculo simétrico com vento simétrico dá campo simétr
 // "Parou" = o ângulo não anda. A velocidade angular tem um jitter de ~1e-4 rad/passo (ruído
 // acústico do fluido, ora positivo ora negativo) que não gira nada; por isso o critério é a
 // variação do ângulo numa janela, não o valor instantâneo de omega.
-// Com amortecimento 0 sobra uma rotação residual de ~2e-5 rad/passo: é o fluido que o próprio
-// rotor pôs em giro e que o arrasta; só a viscosidade o dissipa (escala de dezenas de milhares de
-// passos). Por isso a tolerância é de 0,1 rad por 2000 passos (5e-5 rad/passo, uma volta em ~35 min a
-// 200 passos/s), muito abaixo de qualquer giro visível.
+// Sem o atrito do eixo sobrava uma rotação residual de ~2e-5 rad/passo: o fluido que o próprio
+// rotor pôs em giro o arrastava, e só a viscosidade o dissipava (dezenas de milhares de passos).
+// Com o atrito seco do eixo (ROTOR_AXLE_FRICTION) o rotor para de vez; a tolerância de 0,1 rad por
+// 2000 passos só absorve o jitter do fluido.
 function assentou(s, passos = 2000, tolAngulo = 0.1) {
     const b = s.rotatingBodies[0], a0 = b.angle;
     step(s, passos);
@@ -117,6 +117,17 @@ test('rotor lançado em fluido parado desacelera até praticamente parar', () =>
         step(s, 5000);
         assentou(s);
     }
+});
+
+test('sem amortecimento nenhum, o atrito do eixo ainda para o rotor de vez', () => {
+    const s = new FluidSolver(80, 40); s.boundaryMode = 'open'; s.initFluid(0);
+    const cells = []; for (let y = 13; y <= 27; y++) cells.push({ x: 40, y });
+    s.addRotatingBody(cells, null, { damping: 0 }); s.stampRotatingBodiesOntoGrid();
+    const b = s.rotatingBodies[0]; b.omega = 0.03;
+    step(s, 6000);
+    const a0 = b.angle;
+    step(s, 3000);
+    assert.equal(b.angle, a0, `ainda girando: ${b.angle - a0} rad`);
 });
 
 test('rotor para depois que o vento é cortado', () => {

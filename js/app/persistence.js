@@ -2,7 +2,7 @@
 // exportar/importar a configuração em JSON. Extraído de FluidSimulationApp.js; os métodos são
 // anexados ao protótipo do app por applyMixin, então `this` é a instância do app.
 
-import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20260908d';
+import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102a';
 
 export class Persistence {
     /**
@@ -89,6 +89,7 @@ export class Persistence {
             dyeSources: this.solver.dyeSources,
             rotatingBodies: this.solver.rotatingBodies,
             sourceGroups: this.solver.sourceGroups,
+            physicalScale: this._physicalScaleState(),
             flowSpeed: this.speedSlider.value,
             viscosity: this.viscSlider.value,
             animationSpeed: this.stepsSlider.value,
@@ -145,6 +146,7 @@ export class Persistence {
     }
 
     _applyConfiguration(config, { silent = false } = {}) {
+        this._applyPhysicalScaleState(config.physicalScale);
         this.speedSlider.value = config.flowSpeed;
         this.adjustSpeed();
         this.viscSlider.value = config.viscosity;

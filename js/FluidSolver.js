@@ -95,6 +95,10 @@ export class FluidSolver {
     // é linear em omega, ele entra implicitamente junto com o arrasto, então valores altos de
     // ganho continuam estáveis.
     static ROTOR_MOTOR_GAIN = 0.5;
+    // Atrito seco (de Coulomb) do eixo, em rad/passo² de desaceleração constante: todo eixo real
+    // tem algum, e é ele que faz um rotor solto PARAR de vez. Sem ele, só a viscosidade do fluido
+    // dissipa o giro, por difusão, e o rotor ficava derivando por dezenas de milhares de passos.
+    static ROTOR_AXLE_FRICTION = 2e-6;
 
     // Fração da velocidade macroscópica MANTIDA (não removida) a cada passo, célula a célula,
     // dentro de uma célula MESH — bugs.md #32, "a Grade... diminuiria a velocidade do vento".
@@ -618,6 +622,8 @@ export class FluidSolver {
                 + motorGain * motorOmega;
             body.omega = omegaTarget / (1 + body.damping + dragCoeff / effectiveInertia + motorGain);
             body.omega = Math.max(-omegaMax, Math.min(omegaMax, body.omega));
+            // Atrito seco: reduz |omega| de um valor constante e nunca inverte o sinal.
+            body.omega = Math.sign(body.omega) * Math.max(0, Math.abs(body.omega) - FluidSolver.ROTOR_AXLE_FRICTION);
             body.angle += body.omega;
 
             const cosA = Math.cos(body.angle),

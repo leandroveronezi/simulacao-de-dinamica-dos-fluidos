@@ -1,5 +1,5 @@
 // Simulação rodando no navegador com uma cena completa: todas as visualizações, opções de
-// exibição, modos de contorno e presets de fluido, sem erro de console e sem instabilidade.
+// exibição, modos de contorno e fluidos reais, sem erro de console e sem instabilidade.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { abrirApp, gestos } from './helpers.mjs';
@@ -36,19 +36,19 @@ test('todas as visualizações e opções de exibição rodam sem erro, em Canal
     } finally { await fechar(); }
 });
 
-test('presets de fluido (viscosidade) aplicam o valor e a simulação segue estável', async () => {
+test('cada fluido real, calibrado para 0,1 m/s, mantém a simulação estável', async () => {
     const { page, erros, fechar } = await abrirApp(); const g = gestos(page);
     try {
         await cenaCompleta(page, g);
-        const n = await page.evaluate(() => document.querySelector('#viscSlider').closest('div,details,section').querySelectorAll('select option').length);
-        const opcoes = await page.evaluate(() => [...document.querySelectorAll('option[data-viscosity]')].map(o => [o.textContent, Number(o.dataset.viscosity)]));
-        assert.equal(opcoes.length, 5, `presets: ${n}`);
-        for (const [nome, visc] of opcoes) {
-            await page.selectOption('select:has(option[data-viscosity])', { label: nome });
-            const v = Number(await page.inputValue('#viscSlider'));
-            assert.ok(Math.abs(v - visc) < 0.0051, `${nome}: slider ${v} vs preset ${visc}`);
+        const fluidos = await page.evaluate(() => [...document.querySelectorAll('#fluidSelect option')].map(o => o.value));
+        assert.equal(fluidos.length, 5);
+        for (const f of fluidos) {
+            await page.selectOption('#fluidSelect', f);
+            await page.fill('#targetSpeedInput', '0.1');
+            await page.click('#calibrateButton');
+            await page.evaluate(() => Swal.close()); // aviso de "calibração no limite", se houver
             await page.click('#startButton'); await page.waitForTimeout(300); await page.click('#startButton');
-            assert.ok(await page.evaluate(() => window.__app.solver.checkStability()), `instável com ${nome}`);
+            assert.ok(await page.evaluate(() => window.__app.solver.checkStability()), `instável com ${f}`);
         }
         assert.deepEqual(erros, []);
     } finally { await fechar(); }

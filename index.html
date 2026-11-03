@@ -249,21 +249,31 @@
                     <input id="speedSlider" type="range" min="0" max="0.10" step="0.005" value="0.1">
 
                     <label for="viscSlider">Viscosidade: <span id="viscValue">0.020</span>
-                        <i id="viscosityHelp" class="fas fa-circle-question help-icon" title="Valores de referência"></i>
+                        <i id="viscosityHelp" class="fas fa-circle-question help-icon" title="Entenda a viscosidade"></i>
                     </label>
                     <input id="viscSlider" type="range" min="0.005" max="0.2" step="0.005" value="0.02">
-                    <select id="viscosityPresetSelect">
-                        <option>Selecionar fluido</option>
-                        <option data-viscosity="0.015">Ar</option>
-                        <option data-viscosity="0.030">Água</option>
-                        <option data-viscosity="0.065">Mercúrio</option>
-                        <option data-viscosity="0.125">Mel</option>
-                        <option data-viscosity="0.175">Óleo de Motor</option>
-                    </select>
 
                     <label for="stepsSlider">Velocidade da Animação</label>
                     <input id="stepsSlider" type="range" min="1" max="40" step="1" value="20">
                     <small>Passos/segundo: <span id="speedReadout">0</span></small>
+                </details>
+
+                <details id="physical-scale-panel" open>
+                    <summary><i class="fa-solid fa-ruler-combined"></i> Escala Física</summary>
+                    <label for="fluidSelect">Fluido real
+                        <i id="physicalScaleHelp" class="fas fa-circle-question help-icon" title="Entenda a escala física"></i>
+                    </label>
+                    <select id="fluidSelect"></select>
+
+                    <label for="cellSizeInput">Tamanho de uma célula (mm)</label>
+                    <input id="cellSizeInput" type="number" min="0.001" max="100000" step="any" value="1">
+
+                    <label for="targetSpeedInput">Velocidade desejada (m/s)</label>
+                    <div class="grid-size-row">
+                        <input id="targetSpeedInput" type="number" min="0.0001" step="any" value="0.1" aria-label="Velocidade real desejada em m/s">
+                        <button id="calibrateButton" class="grid-size-apply" type="button">Calibrar</button>
+                    </div>
+                    <small id="physicalScaleReadout" class="grid-size-hint"></small>
                 </details>
 
                 <details open>
@@ -295,7 +305,7 @@
 
 
     <div id="app-tooltip"></div>
-    <script type="module" src="main.js?v=20260908d"></script>
+    <script type="module" src="main.js?v=20261102a"></script>
 </body>
 
 </html>

@@ -2,7 +2,7 @@
 // Extraído de FluidSimulationApp.js; os métodos são anexados ao protótipo do app por applyMixin,
 // então `this` é a instância do app.
 
-import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20260908d';
+import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102a';
 
 export class GridSize {
     /**

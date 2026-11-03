@@ -84,17 +84,21 @@ comportamento for intencional: `UPDATE_SNAPSHOT=1 npm run test:ui`.
 **Parâmetros:**
 
 - **Velocidade do fluxo `u0`** (0 a 0,10): velocidade da entrada do modo Canal.
-- **Viscosidade `ν`** (0,005 a 0,2): ar ≈ 0,01 a 0,02, água ≈ 0,02 a 0,04. Relaciona-se com a
-  relaxação por `ω = 1 / (3ν + 0,5)`.
+- **Viscosidade `ν`** (0,005 a 0,2, de rede): baixa = mais turbulento e menos estável. Relaciona-se
+  com a relaxação por `ω = 1 / (3ν + 0,5)` e, na Escala Física, define a duração de um passo.
 - **Passos por frame** (1 a 40): equilíbrio entre velocidade aparente e custo.
 - **Tamanho da grade:** por padrão acompanha a janela; ajustável no painel Simulação.
 
-**Unidades:** o solver usa unidades de rede (1 célula = 1 de comprimento, 1 passo = 1 de tempo),
-não metros e segundos. Para reproduzir um caso real, iguale o **número de Reynolds**
-`Re = U·D / ν` (U = velocidade do fluxo, D = tamanho do obstáculo em células, ν = viscosidade).
-Exemplo validado nos testes: um cilindro de 16 células com `U = 0,08` e `ν = 0,0128` tem Re = 100
-e solta vórtices com Strouhal ≈ 0,19, como na literatura. Mantenha `U` abaixo de ~0,1: acima
-disso o fluido deixa de ser aproximadamente incompressível e o erro cresce.
+**Escala física** (painel *Escala Física*): o solver trabalha em unidades de rede, e o painel as
+traduz para o SI a partir de um **fluido real** (ar, água, mercúrio, óleo, mel) e do **tamanho de uma
+célula** em mm. O passo de tempo sai de `dt = ν_rede · dx² / ν_real` e a velocidade de `u = u_rede · dx / dt`,
+então o número de Reynolds `Re = U·D / ν` é o mesmo na simulação e na vida real. O painel mostra
+quanto dura um passo, o fluxo em m/s e o tamanho real da cena; o Sensor mostra `|u|` em m/s.
+**Calibrar** recebe a velocidade real desejada e escolhe velocidade e viscosidade de rede; se bater
+no limite (fluxo rápido demais para a célula escolhida), avisa e informa a velocidade obtida.
+Mantenha a velocidade de rede abaixo de ~0,1: acima disso o fluido deixa de ser aproximadamente
+incompressível. Exemplo validado nos testes: um cilindro de 16 células com `U = 0,08` e `ν = 0,0128`
+tem Re = 100 e solta vórtices com Strouhal ≈ 0,19, como na literatura.
 
 **Visualizações:** Densidade (pressão), Velocidade X, Velocidade Y, Módulo da velocidade e
 Rotação (curl, que mostra vórtices bem), além de traçadores, setas de velocidade e de força.
@@ -122,7 +126,9 @@ vizinhas. Densidade e velocidade surgem dos momentos das distribuições.
   somada às distribuições refletidas, então a pá empurra o fluido. A reação sobre o corpo entra
   de forma implícita na equação do movimento, senão o rotor ganharia momento do nada. O torque
   é medido antes dessa correção, para não realimentar. A velocidade angular é limitada para
-  manter a ponta da pá dentro da faixa estável do solver.
+  manter a ponta da pá dentro da faixa estável do solver. O eixo tem atrito seco constante
+  (`ROTOR_AXLE_FRICTION`), então um rotor solto para de vez em vez de derivar por difusão do
+  fluido.
 - **Saída** multiplica as 9 distribuições por `1 − α`: a densidade cai e a velocidade fica
   igual, então o ralo não vira obstáculo. Um piso de densidade (`SINK_RHO_FLOOR = 0,6`) evita
   esvaziar recintos selados. A sucção também cai quando a velocidade de entrada passa de 0,08
@@ -139,6 +145,7 @@ vizinhas. Densidade e velocidade surgem dos momentos das distribuições.
 index.html, style.css, main.js    # página, estilos e ponto de entrada
 js/
   FluidSolver.js          # física LBM, rotores, partículas, traçadores (sem DOM)
+  Unidades.js             # escala física: fluidos reais, dt, m/s, calibração (sem DOM)
   Renderer.js             # desenho no Canvas 2D (ImageData offscreen)
   PolygonGeometry.js      # polígonos das formas e operações booleanas (Clipper.js)
   FluidSimulationApp.js   # núcleo do controlador: DOM, estado, eventos, laço de simulação
@@ -155,6 +162,7 @@ js/
     gridSize.js             #   tamanho da grade
     persistence.js          #   autosave, projetos e importar/exportar JSON
     uiChrome.js             #   tooltip, menus e sliders
+    physicalScale.js        #   painel Escala Física (SI)
     helpDialogs.js          #   diálogos de ajuda
     applyMixin.js           #   anexa esses arquivos ao FluidSimulationApp
 tests/                    # solver, objetos e interface (Chrome real)

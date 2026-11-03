@@ -30,6 +30,6 @@ Os comentários do código citam "bugs.md #N" para itens já concluídos; o hist
 
 ## Convenções que não são óbvias
 
-- **Cache-busting manual:** os imports e o `<script>` usam `?v=20260908d` (em `index.html`, `main.js` e em todos os imports de `js/` e `js/app/`). Ao mudar o código servido ao navegador, troque esse sufixo em todos esses lugares, de forma consistente. Isso importa de verdade: os mixins de `js/app/` importam `FluidSimulationApp.js` de volta (import circular), e um sufixo diferente em um só lugar faz o navegador carregar o módulo duas vezes. `tests/versao.test.mjs` verifica a consistência.
+- **Cache-busting manual:** os imports e o `<script>` usam `?v=20261102a` (em `index.html`, `main.js` e em todos os imports de `js/` e `js/app/`). Ao mudar o código servido ao navegador, troque esse sufixo em todos esses lugares, de forma consistente. Isso importa de verdade: os mixins de `js/app/` importam `FluidSimulationApp.js` de volta (import circular), e um sufixo diferente em um só lugar faz o navegador carregar o módulo duas vezes. `tests/versao.test.mjs` verifica a consistência.
 - Os testes do solver importam `../js/FluidSolver.js` sem o sufixo `?v=`, então o solver não deve importar nada que exija DOM.
 - `fluid-sim-config.json` (grande, ~1,4 MB) é um cenário exportado pelo app e está no `.gitignore`; não o edite à mão nem o commite.

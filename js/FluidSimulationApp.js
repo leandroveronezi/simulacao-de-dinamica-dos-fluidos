@@ -1,20 +1,21 @@
-import { FluidSolver } from './FluidSolver.js?v=20260908d';
-import { Renderer } from './Renderer.js?v=20260908d';
-import { DEFAULT_LINE_WIDTH } from './PolygonGeometry.js?v=20260908d';
-import { applyMixin } from './app/applyMixin.js?v=20260908d';
-import { PointerInput } from './app/pointerInput.js?v=20260908d';
-import { ShapeDrag } from './app/shapeDrag.js?v=20260908d';
-import { HitTesting } from './app/hitTesting.js?v=20260908d';
-import { ShapeProperties } from './app/shapeProperties.js?v=20260908d';
-import { Rasterization } from './app/rasterization.js?v=20260908d';
-import { ControlPanel } from './app/controlPanel.js?v=20260908d';
-import { GridSize } from './app/gridSize.js?v=20260908d';
-import { UiChrome } from './app/uiChrome.js?v=20260908d';
-import { Viewport } from './app/viewport.js?v=20260908d';
-import { History } from './app/history.js?v=20260908d';
-import { Selection } from './app/selection.js?v=20260908d';
-import { Persistence } from './app/persistence.js?v=20260908d';
-import { HelpDialogs } from './app/helpDialogs.js?v=20260908d';
+import { FluidSolver } from './FluidSolver.js?v=20261102a';
+import { Renderer } from './Renderer.js?v=20261102a';
+import { DEFAULT_LINE_WIDTH } from './PolygonGeometry.js?v=20261102a';
+import { applyMixin } from './app/applyMixin.js?v=20261102a';
+import { PointerInput } from './app/pointerInput.js?v=20261102a';
+import { ShapeDrag } from './app/shapeDrag.js?v=20261102a';
+import { HitTesting } from './app/hitTesting.js?v=20261102a';
+import { ShapeProperties } from './app/shapeProperties.js?v=20261102a';
+import { Rasterization } from './app/rasterization.js?v=20261102a';
+import { ControlPanel } from './app/controlPanel.js?v=20261102a';
+import { GridSize } from './app/gridSize.js?v=20261102a';
+import { UiChrome } from './app/uiChrome.js?v=20261102a';
+import { Viewport } from './app/viewport.js?v=20261102a';
+import { History } from './app/history.js?v=20261102a';
+import { Selection } from './app/selection.js?v=20261102a';
+import { Persistence } from './app/persistence.js?v=20261102a';
+import { HelpDialogs } from './app/helpDialogs.js?v=20261102a';
+import { PhysicalScale } from './app/physicalScale.js?v=20261102a';
 
 /**
  * @class FluidSimulationApp
@@ -101,6 +102,7 @@ export class FluidSimulationApp {
         this._bindEventListeners();
         this._initTooltip();
         this._initSliderFills();
+        this._initPhysicalScalePanel();
         this._requestPaint();
     }
 
@@ -139,7 +141,12 @@ export class FluidSimulationApp {
         this.stepsSlider = this.root.querySelector('#stepsSlider');
         this.viscSlider = this.root.querySelector('#viscSlider');
         this.viscValue = this.root.querySelector('#viscValue');
-        this.viscosityPresetSelect = this.root.querySelector('#viscosityPresetSelect');
+        this.fluidSelect = this.root.querySelector('#fluidSelect');
+        this.cellSizeInput = this.root.querySelector('#cellSizeInput');
+        this.targetSpeedInput = this.root.querySelector('#targetSpeedInput');
+        this.calibrateButton = this.root.querySelector('#calibrateButton');
+        this.physicalScaleReadout = this.root.querySelector('#physicalScaleReadout');
+        this.physicalScaleHelp = this.root.querySelector('#physicalScaleHelp');
         this.viscosityHelp = this.root.querySelector('#viscosityHelp');
         this.rotorMassSlider = this.root.querySelector('#rotorMassSlider');
         this.rotorMassValue = this.root.querySelector('#rotorMassValue');
@@ -352,6 +359,7 @@ export class FluidSimulationApp {
         this.saveAsProjectButton.addEventListener('click', () => this._saveProjectAs());
         this.openProjectButton.addEventListener('click', () => this._openProjectPicker());
         this.viscosityHelp.addEventListener('click', () => this._showViscosityHelp());
+        this.physicalScaleHelp.addEventListener('click', () => this._showPhysicalScaleHelp());
         this.visualizationHelp.addEventListener('click', () => this._showVisualizationHelp());
         this.speedHelp.addEventListener('click', () => this._showSpeedHelp());
         this.boundaryModeHelp.addEventListener('click', () => this._showBoundaryModeHelp());
@@ -388,7 +396,6 @@ export class FluidSimulationApp {
             button.addEventListener('click', () => this._setActivePaintType(button.dataset.paintType));
         });
         this.viscSlider.addEventListener('input', () => this.adjustViscosity());
-        this.viscosityPresetSelect.addEventListener('change', () => this._applyViscosityPreset());
         this.rotorMassSlider.addEventListener('input', () => {
             this.rotorMassValue.innerHTML = Number(this.rotorMassSlider.value).toFixed(1);
             this._writeRotorProperty('massMultiplier', Number(this.rotorMassSlider.value));
@@ -679,6 +686,7 @@ export class FluidSimulationApp {
         this.selectedRotorIndex = -1;
         if (this.rotorMassSlider) this._updateFloatingPanel();
         this._syncGridSizeInputs();
+        this._updatePhysicalScalePanel();
 
         this._requestPaint();
     }
@@ -838,6 +846,7 @@ export class FluidSimulationApp {
             showForce: this.forceCheck.checked,
             showArrows: this.arrowsCheck.checked,
             showSensor: this.sensorCheck.checked,
+            velocityScale: this._physicalScale().velocidade,
             activeTool: this.activeTool,
             toolStartPoint: this.toolStartPoint,
             mouseIsDown: this.mouseIsDown,
@@ -903,20 +912,14 @@ export class FluidSimulationApp {
     }
     adjustSpeed() {
         this.speedValue.innerHTML = Number(this.speedSlider.value).toFixed(3);
+        this._updatePhysicalScalePanel();
         if (!this.running) {
             this.initFluid();
         }
     }
     adjustViscosity() {
         this.viscValue.innerHTML = Number(this.viscSlider.value).toFixed(3);
-    }
-    _applyViscosityPreset() {
-        const selectedIndex = this.viscosityPresetSelect.selectedIndex;
-        if (selectedIndex === 0) return;
-        this.viscSlider.value = this.viscosityPresetSelect.options[selectedIndex].dataset.viscosity;
-        this.adjustViscosity();
-        this._updateSliderFill(this.viscSlider);
-        this.viscosityPresetSelect.selectedIndex = 0;
+        this._updatePhysicalScalePanel();
     }
     clearBarriers() {
         // rawCellType/shapes[] são a fonte de verdade — só zerar solver.cellType não bastava
@@ -972,6 +975,6 @@ export class FluidSimulationApp {
 
 // Métodos divididos por assunto (um arquivo cada em js/app/). A ordem não importa: o applyMixin
 // recusa dois métodos com o mesmo nome.
-for (const mixin of [PointerInput, ShapeDrag, HitTesting, ShapeProperties, Rasterization, ControlPanel, GridSize, UiChrome, Viewport, History, Selection, Persistence, HelpDialogs]) {
+for (const mixin of [PointerInput, ShapeDrag, HitTesting, ShapeProperties, Rasterization, ControlPanel, GridSize, UiChrome, Viewport, History, Selection, Persistence, HelpDialogs, PhysicalScale]) {
     applyMixin(FluidSimulationApp.prototype, mixin);
 }

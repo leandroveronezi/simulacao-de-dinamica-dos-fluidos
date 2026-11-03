@@ -1,6 +1,8 @@
 // Diálogos de ajuda (botões "?") do FluidSimulationApp. Extraído de FluidSimulationApp.js; os
 // métodos são anexados ao protótipo do app por applyMixin, então `this` é a instância do app.
 
+import { formatarVelocidade, formatarTempo } from '../Unidades.js?v=20261102a';
+
 export class HelpDialogs {
     _showMeshHoleSizeHelp() {
         Swal.fire({
@@ -19,10 +21,11 @@ export class HelpDialogs {
     }
 
     _showViscosityHelp() {
+        const e = this._physicalScale();
         Swal.fire({
-            title: 'Valores de Referência de Viscosidade',
-            html: `<p>A viscosidade nesta simulação é um parâmetro adimensional. Use os valores abaixo como ponto de partida.</p><table><thead><tr><th>Fluido (a 20°C)</th><th>Viscosidade (Aprox.)</th></tr></thead><tbody><tr><td>Ar</td><td>0.010 - 0.020</td></tr><tr><td>Água</td><td>0.020 - 0.040</td></tr><tr><td>Mercúrio</td><td>0.050 - 0.080</td></tr><tr><td>Mel</td><td>0.100 - 0.150</td></tr><tr><td>Óleo de Motor</td><td>0.150 - 0.200</td></tr></tbody></table><small>Fonte: Valores adaptados para esta simulação. Para dados reais, consulte <a href="https://www.engineersedge.com/fluid_flow/kinematic-viscosity-table.htm" target="_blank">recursos de engenharia</a>.</small>`,
-            icon: 'info'
+            title: 'Viscosidade',
+            icon: 'info',
+            html: `<p>Este slider é a viscosidade <strong>da rede</strong> (adimensional). Ela controla a estabilidade: valores baixos dão fluxo mais turbulento e podem divergir; valores altos suavizam tudo.</p><p>Com o fluido e o tamanho de célula do painel <strong>Escala Física</strong>, ela define quanto tempo real dura um passo: <strong>${formatarTempo(e.dt)}</strong> agora. O fluido real (ar, água...) não muda a rede, só a conversão para o SI; o que muda o comportamento é o número de Reynolds <code>Re = U·D/ν</code>, e o botão <strong>Calibrar</strong> escolhe velocidade e viscosidade de rede para reproduzir uma velocidade real.</p>`
         });
     }
 
@@ -36,13 +39,19 @@ export class HelpDialogs {
 
     _showSpeedHelp() {
         const u0 = Number(this.speedSlider.value);
-        const speed_scaling_factor = 150;
-        const speed_ms = u0 * speed_scaling_factor;
-        const speed_kmh = speed_ms * 3.6;
+        const e = this._physicalScale();
         Swal.fire({
-            title: 'Equivalência da Velocidade do Fluxo',
+            title: 'Velocidade do Fluxo',
             icon: 'info',
-            html: ` <p>A velocidade na simulação (<strong>${u0.toFixed(3)}</strong>) é um valor adimensional. Para correlacioná-la com o mundo real, precisamos fazer algumas suposições sobre a escala.</p> <table> <thead><tr><th>Velocidade Atual (Aprox.)</th></tr></thead> <tbody> <tr><td><strong>${speed_ms.toFixed(1)} m/s</strong></td></tr> <tr><td><strong>${speed_kmh.toFixed(1)} km/h</strong></td></tr> </tbody> </table> <div class="note"> <strong>Nota sobre a escala:</strong> Esta conversão assume que um objeto como o aerofólio (com ~40 células de largura) mede 1 metro na vida real, e que o fator de escala temporal da simulação resulta em uma multiplicação por ${speed_scaling_factor}. Altere este fator no código para ajustar a calibração para diferentes cenários. </div>`
+            html: `<p>O slider está em unidades de rede (<strong>${u0.toFixed(3)}</strong>, em células por passo). Com a escala atual isso equivale a <strong>${formatarVelocidade(u0 * e.velocidade)}</strong> (${(u0 * e.velocidade * 3.6).toPrecision(3)} km/h).</p><div class="note">A conversão vem do painel <strong>Escala Física</strong>: <code>m/s = unidade de rede × tamanho da célula ÷ tempo de um passo</code>. Mantenha a velocidade de rede abaixo de ~0,1: acima disso o fluido deixa de ser aproximadamente incompressível.</div>`
+        });
+    }
+
+    _showPhysicalScaleHelp() {
+        Swal.fire({
+            title: 'Escala Física',
+            icon: 'info',
+            html: `<p>O solver trabalha em unidades de rede (1 célula, 1 passo). Esta escala traduz para o SI:</p><ul><li><strong>Fluido real</strong>: viscosidade cinemática verdadeira (ar 1,5×10⁻⁵, água 1×10⁻⁶ m²/s...).</li><li><strong>Tamanho da célula</strong>: quantos mm tem cada quadradinho. Define o tamanho real da cena e dos obstáculos.</li><li><strong>Calibrar</strong>: dada a velocidade real desejada, ajusta a velocidade e a viscosidade de rede. O tempo de cada passo sai de <code>dt = ν_rede·dx² / ν_real</code>.</li></ul><div class="note">O número de Reynolds é preservado: <code>Re = U·D/ν</code> é o mesmo na simulação e na vida real. Fluxos reais muito rápidos exigem células pequenas, senão a calibração bate no limite e avisa.</div>`
         });
     }
 

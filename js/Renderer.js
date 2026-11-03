@@ -1,4 +1,4 @@
-import { FluidSolver } from './FluidSolver.js?v=20260908d';
+import { FluidSolver } from './FluidSolver.js?v=20261102a';
 
 /**
  * @class Renderer
@@ -226,7 +226,7 @@ export class Renderer {
                 solver.barrierFx, solver.barrierFy, solver.ydim, pxPerSquare
             );
         }
-        if (viewState.showSensor) this.drawSensor(solver, pxPerSquare);
+        if (viewState.showSensor) this.drawSensor(solver, pxPerSquare, viewState.velocityScale);
         if (viewState.toolStartPoint && viewState.mouseIsDown) {
             this._drawPreviewShape(viewState.activeTool, viewState.toolStartPoint, viewState.mouseGridPos, solver.ydim, pxPerSquare);
         }
@@ -971,7 +971,7 @@ export class Renderer {
         }
     }
 
-    drawSensor(solver, pxPerSquare) {
+    drawSensor(solver, pxPerSquare, escalaVelocidade = 0) {
         const cX = (solver.sensorX + 0.5) * pxPerSquare;
         let cY = (solver.ydim - (solver.sensorY + 0.5)) * pxPerSquare;
 
@@ -991,8 +991,8 @@ export class Renderer {
 
         // Em seguida, desenha o painel de texto sobreposto, centralizado verticalmente com a mira
         this.context.font = "12px Monospace";
-        const rectWidth = this.context.measureText("ux = -0.000").width + 10,
-            rectHeight = 62;
+        const rectWidth = this.context.measureText(escalaVelocidade > 0 ? "|u| = 000.0 mm/s" : "ux = -0.000").width + 10,
+            rectHeight = escalaVelocidade > 0 ? 78 : 62;
         let tX = cX + 26,
             tY = cY - rectHeight / 2;
         if (tX + rectWidth > solver.xdim * pxPerSquare) tX -= (rectWidth + 52);
@@ -1016,6 +1016,11 @@ export class Renderer {
         this.context.fillText(`ux = ${solver.ux[index].toFixed(3).padStart(6, ' ')}`, tX, tY);
         tY += 16;
         this.context.fillText(`uy = ${solver.uy[index].toFixed(3).padStart(6, ' ')}`, tX, tY);
+        if (escalaVelocidade > 0) {
+            tY += 16;
+            const ms = Math.hypot(solver.ux[index], solver.uy[index]) * escalaVelocidade;
+            this.context.fillText(`|u| = ${ms >= 1 ? ms.toFixed(2) + ' m/s' : ms >= 0.01 ? (ms * 100).toFixed(1) + ' cm/s' : (ms * 1000).toFixed(1) + ' mm/s'}`, tX, tY);
+        }
     }
 
     _drawPreviewShape(activeTool, start, end, ydim, pxPerSquare) {
