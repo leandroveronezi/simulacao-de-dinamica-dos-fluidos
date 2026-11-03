@@ -13,3 +13,7 @@ playwright-report/
 .DS_Store
 *.swp
 *.bmp
+
+# Notas locais (não publicar)
+bugs.md
+checklist.md
