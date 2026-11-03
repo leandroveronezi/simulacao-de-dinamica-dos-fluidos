@@ -2,8 +2,8 @@
 // ajuste (snap) de pontas e criação de formas. Extraído de FluidSimulationApp.js; os métodos são
 // anexados ao protótipo do app por applyMixin, então `this` é a instância do app.
 
-import { FluidSolver } from '../FluidSolver.js?v=20261102a';
-import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102a';
+import { FluidSolver } from '../FluidSolver.js?v=20261102b';
+import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102b';
 
 export class PointerInput {
     /**
@@ -331,10 +331,14 @@ export class PointerInput {
     }
 
     _handleMouseLeave(e) {
-        this.mouseGridPos = {
-            x: -1,
-            y: -1
-        };
+        // Com o botão pressionado, mantém a última posição válida: o mouseup fora do canvas
+        // usa mouseGridPos como ponta final do gesto (senão a forma ia parar no canto 0,0).
+        if (!this.mouseIsDown) {
+            this.mouseGridPos = {
+                x: -1,
+                y: -1
+            };
+        }
         this.pastePreviewOrigin = null;
         this._requestPaint();
     }

@@ -23,10 +23,16 @@ test('todos os imports e scripts usam o mesmo sufixo ?v=', () => {
     assert.equal(versoes.size, 1, 'versões diferentes: ' + JSON.stringify([...versoes].map(([v, fs_]) => [v, [...new Set(fs_)]])));
 });
 
+test('index.html e main.js carregam o módulo com o sufixo ?v=', () => {
+    for (const f of ['index.html', 'main.js']) {
+        assert.match(fs.readFileSync(path.join(ROOT, f), 'utf8'), /\?v=[A-Za-z0-9]+/, f);
+    }
+});
+
 test('todo import relativo de js/ e main.js leva o sufixo ?v=', () => {
     const sem = [];
     for (const f of fontes.filter(f => f.endsWith('.js'))) {
-        for (const m of fs.readFileSync(f, 'utf8').matchAll(/^\s*(?:import|export)\b[^'"\n]*from\s+['"](\.[^'"]+)['"]/gm)) {
+        for (const m of fs.readFileSync(f, 'utf8').matchAll(/\bfrom\s+['"](\.[^'"]+)['"]/g)) {
             if (!m[1].includes('?v=')) sem.push(`${path.relative(ROOT, f)}: ${m[1]}`);
         }
         for (const m of fs.readFileSync(f, 'utf8').matchAll(/import\(\s*['"](\.[^'"]+)['"]/g)) {

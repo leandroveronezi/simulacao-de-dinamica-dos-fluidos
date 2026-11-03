@@ -20,9 +20,10 @@ a fonte vêm de CDN.
 
 ```bash
 npm install            # só na primeira vez (instala o playwright-core)
-npm test               # solver e objetos, em Node puro, sem navegador (rápido)
-npm run test:ui        # interface em um Chrome real: desenho, edição, seleção, zoom, salvar
-npm run test:all       # tudo
+npm test               # solver, objetos e leis físicas, em Node puro, sem navegador
+npm run test:ui        # interface em um Chrome real: desenho, edição, seleção, zoom, salvar,
+                       # escala física, simulação completa e estresse com ações aleatórias
+npm run test:all       # tudo (cerca de 2 minutos)
 ```
 
 O teste de interface usa o Chrome do sistema (`/usr/bin/google-chrome`) e compara o estado

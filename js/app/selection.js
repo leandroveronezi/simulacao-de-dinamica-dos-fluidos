@@ -2,15 +2,18 @@
 // espelhar e girar. Extraído de FluidSimulationApp.js; os métodos são anexados ao protótipo do
 // app por applyMixin, então `this` é a instância do app.
 
-import { FluidSolver } from '../FluidSolver.js?v=20261102a';
+import { FluidSolver } from '../FluidSolver.js?v=20261102b';
 
 export class Selection {
     _getSelectionBounds() {
         if (!this.selectionArea) return null;
-        const x_start = Math.min(this.selectionArea.start.x, this.selectionArea.end.x);
-        const x_end = Math.max(this.selectionArea.start.x, this.selectionArea.end.x);
-        const y_start = Math.min(this.selectionArea.start.y, this.selectionArea.end.y);
-        const y_end = Math.max(this.selectionArea.start.y, this.selectionArea.end.y);
+        // Limitada à grade: arrastar a seleção para fora do canvas não pode incluir células que
+        // não existem (cellType[...] seria undefined e entraria no clipboard como lixo).
+        const lim = (v, max) => Math.max(0, Math.min(max - 1, v));
+        const x_start = lim(Math.min(this.selectionArea.start.x, this.selectionArea.end.x), this.solver.xdim);
+        const x_end = lim(Math.max(this.selectionArea.start.x, this.selectionArea.end.x), this.solver.xdim);
+        const y_start = lim(Math.min(this.selectionArea.start.y, this.selectionArea.end.y), this.solver.ydim);
+        const y_end = lim(Math.max(this.selectionArea.start.y, this.selectionArea.end.y), this.solver.ydim);
         return {
             x_start,
             x_end,

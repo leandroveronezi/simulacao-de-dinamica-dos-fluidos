@@ -35,6 +35,26 @@ test('calibrar avisa quando a viscosidade de rede necessária sai da faixa', () 
     assert.ok(r.velocidadeObtida < 1, 'não pode prometer a velocidade pedida');
 });
 
+test('formatadores promovem a unidade ao arredondar e tratam valores fora do domínio', () => {
+    assert.equal(formatarTempo(0.0009999), '1 ms');
+    assert.equal(formatarTempo(0.99999), '1 s');
+    assert.equal(formatarVelocidade(0.9996), '1 m/s');
+    assert.equal(formatarComprimento(0.0099999), '1 cm');
+    assert.equal(formatarVelocidade(NaN), '—');
+    assert.equal(formatarTempo(0), '0 s');
+    assert.equal(formatarVelocidade(1e-12), '~0 m/s');
+});
+
+test('calibrar recusa entradas inválidas e sinaliza a velocidade mínima', () => {
+    for (const ruim of [0, -1, NaN, Infinity]) {
+        assert.throws(() => calibrar({ nuFisico: 1.5e-5, tamanhoCelulaM: 1e-3, velocidade: ruim }), RangeError);
+        assert.throws(() => calibrar({ nuFisico: 1.5e-5, tamanhoCelulaM: ruim, velocidade: 0.1 }), RangeError);
+    }
+    const r = calibrar({ nuFisico: FLUIDOS.ar.nu, tamanhoCelulaM: 1e-3, velocidade: 3e-4 });
+    assert.equal(r.limitado, true);
+    assert.ok(r.velocidadeObtida > 3e-4, 'a velocidade mínima de rede passa da pedida');
+});
+
 test('formatadores escolhem a unidade legível', () => {
     assert.match(formatarVelocidade(2.5), /m\/s/);
     assert.match(formatarVelocidade(0.12), /cm\/s/);

@@ -2,11 +2,11 @@
 // (m/s, ms, cm) nos controles e no sensor. Extraído no mesmo molde dos outros arquivos de
 // js/app/: os métodos são anexados ao protótipo do app por applyMixin, `this` é o app.
 
-import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102a';
+import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102b';
 import {
-    FLUIDOS, FLUIDO_PADRAO, CELULA_PADRAO_MM, calcularEscala, calibrar,
+    FLUIDOS, FLUIDO_PADRAO, CELULA_PADRAO_MM, CELULA_MIN_MM, CELULA_MAX_MM, calcularEscala, calibrar,
     formatarVelocidade, formatarTempo, formatarComprimento,
-} from '../Unidades.js?v=20261102a';
+} from '../Unidades.js?v=20261102b';
 
 export class PhysicalScale {
     /**
@@ -17,7 +17,7 @@ export class PhysicalScale {
     _physicalScale() {
         const fluido = FLUIDOS[this.fluidSelect.value] || FLUIDOS[FLUIDO_PADRAO];
         let mm = Number(this.cellSizeInput.value);
-        if (!(mm > 0)) mm = CELULA_PADRAO_MM;
+        mm = Number.isFinite(mm) && mm > 0 ? Math.min(CELULA_MAX_MM, Math.max(CELULA_MIN_MM, mm)) : CELULA_PADRAO_MM;
         return {
             fluido,
             ...calcularEscala({ nuFisico: fluido.nu, tamanhoCelulaM: mm / 1000, nuRede: Number(this.viscSlider.value) }),
@@ -32,6 +32,11 @@ export class PhysicalScale {
         this.cellSizeInput.value = CELULA_PADRAO_MM;
         this.fluidSelect.addEventListener('change', () => this._updatePhysicalScalePanel());
         this.cellSizeInput.addEventListener('input', () => this._updatePhysicalScalePanel());
+        // Ao sair do campo, o valor mostrado passa a ser o que a escala realmente usa.
+        this.cellSizeInput.addEventListener('change', () => {
+            this.cellSizeInput.value = this._physicalScale().comprimento * 1000;
+            this._updatePhysicalScalePanel();
+        });
         this.calibrateButton.addEventListener('click', () => this._calibratePhysicalScale());
         this._updatePhysicalScalePanel();
     }
@@ -63,7 +68,10 @@ export class PhysicalScale {
      */
     _calibratePhysicalScale() {
         const pedida = Number(this.targetSpeedInput.value);
-        if (!(pedida > 0)) return;
+        if (!(pedida > 0) || !Number.isFinite(pedida)) {
+            Swal.fire({ icon: 'warning', title: 'Informe a velocidade', text: 'Digite uma velocidade real maior que zero (em m/s).' });
+            return;
+        }
         const e = this._physicalScale();
         const r = calibrar({ nuFisico: e.fluido.nu, tamanhoCelulaM: e.comprimento, velocidade: pedida });
         this.speedSlider.value = r.uRede;
@@ -85,7 +93,7 @@ export class PhysicalScale {
 
     /** @private Estado da escala para salvar/exportar. */
     _physicalScaleState() {
-        return { fluid: this.fluidSelect.value, cellSizeMm: Number(this.cellSizeInput.value) };
+        return { fluid: this.fluidSelect.value, cellSizeMm: this._physicalScale().comprimento * 1000 };
     }
 
     /** @private Restaura a escala de uma configuração (arquivos antigos não têm: usa o padrão). */

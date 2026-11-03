@@ -2,7 +2,7 @@
 // exportar/importar a configuração em JSON. Extraído de FluidSimulationApp.js; os métodos são
 // anexados ao protótipo do app por applyMixin, então `this` é a instância do app.
 
-import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102a';
+import { FluidSimulationApp } from '../FluidSimulationApp.js?v=20261102b';
 
 export class Persistence {
     /**
@@ -145,7 +145,29 @@ export class Persistence {
         input.click();
     }
 
+    /**
+     * @private
+     * @description Recusa configurações cujos tamanhos não batem (grade fora dos limites ou
+     * matrizes com comprimento diferente de xdim*ydim): aplicá-las deixaria o desenho
+     * silenciosamente truncado ou fora de lugar.
+     */
+    _validateConfiguration(config) {
+        const { GRID_MIN_DIM: MIN, GRID_MAX_DIM: MAX, GRID_MAX_AREA } = FluidSimulationApp;
+        const { xdim, ydim } = config || {};
+        if (!Number.isInteger(xdim) || !Number.isInteger(ydim) || xdim < MIN || ydim < MIN || xdim > MAX || ydim > MAX || xdim * ydim > GRID_MAX_AREA) {
+            throw new Error(`Tamanho de grade inválido (${xdim} × ${ydim}).`);
+        }
+        const n = xdim * ydim;
+        const camadas = { rawCellType: config.rawCellType, cellTypes: config.cellTypes, sourceVx: config.sourceVx, sourceVy: config.sourceVy };
+        for (const [nome, v] of Object.entries(camadas)) {
+            if (v !== undefined && (!Array.isArray(v) || v.length !== n)) {
+                throw new Error(`O campo "${nome}" tem ${Array.isArray(v) ? v.length : 'formato inválido'} valores; a grade ${xdim} × ${ydim} exige ${n}.`);
+            }
+        }
+    }
+
     _applyConfiguration(config, { silent = false } = {}) {
+        this._validateConfiguration(config);
         this._applyPhysicalScaleState(config.physicalScale);
         this.speedSlider.value = config.flowSpeed;
         this.adjustSpeed();
@@ -256,6 +278,10 @@ export class Persistence {
     _newProject() {
         const proceed = () => {
             this.clearBarriers();
+            // Projeto novo começa sem histórico: Ctrl+Z não pode trazer o desenho do anterior.
+            this.undoStack = [];
+            this.redoStack = [];
+            this._updateUndoRedoButtons();
             this.activeProjectId = null;
             this.activeProjectName = null;
             this.hasUnsavedChanges = false;

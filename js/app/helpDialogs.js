@@ -1,7 +1,7 @@
 // Diálogos de ajuda (botões "?") do FluidSimulationApp. Extraído de FluidSimulationApp.js; os
 // métodos são anexados ao protótipo do app por applyMixin, então `this` é a instância do app.
 
-import { formatarVelocidade, formatarTempo } from '../Unidades.js?v=20261102a';
+import { formatarVelocidade, formatarTempo } from '../Unidades.js?v=20261102b';
 
 export class HelpDialogs {
     _showMeshHoleSizeHelp() {
@@ -43,7 +43,7 @@ export class HelpDialogs {
         Swal.fire({
             title: 'Velocidade do Fluxo',
             icon: 'info',
-            html: `<p>O slider está em unidades de rede (<strong>${u0.toFixed(3)}</strong>, em células por passo). Com a escala atual isso equivale a <strong>${formatarVelocidade(u0 * e.velocidade)}</strong> (${(u0 * e.velocidade * 3.6).toPrecision(3)} km/h).</p><div class="note">A conversão vem do painel <strong>Escala Física</strong>: <code>m/s = unidade de rede × tamanho da célula ÷ tempo de um passo</code>. Mantenha a velocidade de rede abaixo de ~0,1: acima disso o fluido deixa de ser aproximadamente incompressível.</div>`
+            html: `<p>O slider está em unidades de rede (<strong>${u0.toFixed(3)}</strong>, em células por passo). Com a escala atual isso equivale a <strong>${formatarVelocidade(u0 * e.velocidade)}</strong> (${(u0 * e.velocidade * 3.6).toLocaleString('pt-BR', { maximumSignificantDigits: 3 })} km/h).</p><div class="note">A conversão vem do painel <strong>Escala Física</strong>: <code>m/s = unidade de rede × tamanho da célula ÷ tempo de um passo</code>. Mantenha a velocidade de rede abaixo de ~0,1: acima disso o fluido deixa de ser aproximadamente incompressível.</div>`
         });
     }
 

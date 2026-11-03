@@ -308,3 +308,29 @@ test('Saída grande (60x40, sucção padrão) não instabiliza o escoamento em 6
         assert.ok(s.checkStability(), 'instável ao final');
     } finally { console.warn = aviso; }
 });
+
+test('rotores sobrepostos não abrem buracos de um passo', () => {
+    const s = new FluidSolver(80, 50); s.boundaryMode = 'open'; s.initFluid(0);
+    const pa = [], pb = [];
+    for (let x = 31; x <= 47; x++) pa.push({ x, y: 25 });
+    for (let x = 34; x <= 44; x++) pb.push({ x, y: 25 });
+    s.addRotatingBody(pa, { x: 39, y: 25 }, { motorDirection: 1, motorSpeed: 1 });
+    s.addRotatingBody(pb, { x: 39, y: 25 }, { motorDirection: -1, motorSpeed: 0.2 });
+    s.stampRotatingBodiesOntoGrid();
+    let buracos = 0;
+    for (let k = 0; k < 1500; k++) {
+        s.step({ u0: 0, viscosity: 0.02, moveTracers: false });
+        for (const b of s.rotatingBodies) for (const { x, y } of b.currentCells) if (s.cellType[x + y * s.xdim] !== FluidSolver.CELL_TYPE.ROTOR) buracos++;
+    }
+    assert.equal(buracos, 0);
+});
+
+test('partícula dentro de uma Barreira é levada para fora; NaN na viscosidade não contamina a grade', () => {
+    const s = new FluidSolver(60, 40); s.boundaryMode = 'open'; s.initFluid(0);
+    for (let x = 20; x < 30; x++) for (let y = 10; y < 20; y++) s.setCell(x, y, FluidSolver.CELL_TYPE.BARRIER);
+    s.addParticle(25, 15, 0.5, 'ball');
+    for (let k = 0; k < 20; k++) s.step({ u0: 0, viscosity: NaN, moveTracers: false });
+    const p = s.particles.find(q => q.x >= 0);
+    assert.ok(!p || s._isFreeForTracer(p.x, p.y), 'a partícula continua dentro da barreira');
+    assert.ok(s.checkStability(), 'viscosidade NaN contaminou a grade');
+});

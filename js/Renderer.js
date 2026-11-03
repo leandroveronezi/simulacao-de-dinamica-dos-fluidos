@@ -1,4 +1,5 @@
-import { FluidSolver } from './FluidSolver.js?v=20261102a';
+import { FluidSolver } from './FluidSolver.js?v=20261102b';
+import { formatarVelocidade } from './Unidades.js?v=20261102b';
 
 /**
  * @class Renderer
@@ -991,7 +992,7 @@ export class Renderer {
 
         // Em seguida, desenha o painel de texto sobreposto, centralizado verticalmente com a mira
         this.context.font = "12px Monospace";
-        const rectWidth = this.context.measureText(escalaVelocidade > 0 ? "|u| = 000.0 mm/s" : "ux = -0.000").width + 10,
+        const rectWidth = this.context.measureText(escalaVelocidade > 0 ? "|u| = 1.230 cm/s" : "ux = -0.000").width + 10,
             rectHeight = escalaVelocidade > 0 ? 78 : 62;
         let tX = cX + 26,
             tY = cY - rectHeight / 2;
@@ -1019,7 +1020,7 @@ export class Renderer {
         if (escalaVelocidade > 0) {
             tY += 16;
             const ms = Math.hypot(solver.ux[index], solver.uy[index]) * escalaVelocidade;
-            this.context.fillText(`|u| = ${ms >= 1 ? ms.toFixed(2) + ' m/s' : ms >= 0.01 ? (ms * 100).toFixed(1) + ' cm/s' : (ms * 1000).toFixed(1) + ' mm/s'}`, tX, tY);
+            this.context.fillText(`|u| = ${formatarVelocidade(ms)}`, tX, tY);
         }
     }
 

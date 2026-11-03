@@ -564,6 +564,10 @@ export class FluidSolver {
         const xdim = this.xdim,
             ydim = this.ydim;
         const survivingBodies = [];
+        // Células que um corpo já processado NESTE passo acabou de estampar: o corpo seguinte não
+        // pode liberá-las (ainda são ROTOR, mas agora de outro dono), senão rotores sobrepostos
+        // abrem um buraco de fluido por um passo.
+        const estampadasNestePasso = new Set();
         for (let oldIndex = 0; oldIndex < this.rotatingBodies.length; oldIndex++) {
             const body = this.rotatingBodies[oldIndex];
             // Um corpo cujas células foram todas apagadas por fora (borracha, apagar seleção,
@@ -656,6 +660,7 @@ export class FluidSolver {
                 if (newKeys.has(x + ',' + y)) continue;
                 const i = x + y * xdim;
                 if (this.cellType[i] !== FluidSolver.CELL_TYPE.ROTOR) continue;
+                if (estampadasNestePasso.has(i)) continue;
                 this.cellType[i] = FluidSolver.CELL_TYPE.NORMAL;
                 this.rotorWallVx[i] = 0;
                 this.rotorWallVy[i] = 0;
@@ -670,6 +675,7 @@ export class FluidSolver {
             } of newCells) {
                 const i = x + y * xdim;
                 this.cellType[i] = FluidSolver.CELL_TYPE.ROTOR;
+                estampadasNestePasso.add(i);
                 // Velocidade local da "parede" nesta célula: ω×r, r = célula - pivô.
                 this.rotorWallVx[i] = -body.omega * (y - body.pivotY);
                 this.rotorWallVy[i] = body.omega * (x - body.pivotX);
@@ -825,6 +831,9 @@ export class FluidSolver {
         viscosity,
         moveTracers
     }) {
+        // Um NaN em viscosidade ou velocidade contaminaria a grade inteira em poucos passos.
+        if (!Number.isFinite(viscosity)) viscosity = 0.02;
+        if (!Number.isFinite(u0)) u0 = 0;
         this.collide(viscosity);
         this.stream();
         if (this.rotatingBodies.length > 0) {
@@ -1783,6 +1792,13 @@ export class FluidSolver {
             // ela ficava presa no sólido, refletindo para sempre. Ejeta para a célula livre mais
             // próxima, levando a velocidade da pá (o empurrão que uma pá de verdade daria).
             if (this.rotatingBodies.length > 0) this._ejectParticleFromRotor(p);
+            // Barreira pintada por cima da partícula (ou partícula solta dentro dela): leva para o
+            // ponto livre mais próximo; sem nenhum por perto, ela some em vez de ficar congelada.
+            if (!this._isFreeForTracer(p.x, p.y)) {
+                const livre = this._nearestFreePoint(p.x, p.y);
+                if (!livre) { this._deactivateParticle(p); continue; }
+                p.x = livre.x; p.y = livre.y; p.vx = 0; p.vy = 0;
+            }
             const phys = FluidSolver.particlePhysicsFromWeight(p.weight);
             p.vx += phys.drag * (fluidUx - p.vx);
             p.vy += phys.drag * (fluidUy - p.vy) - phys.gravity;

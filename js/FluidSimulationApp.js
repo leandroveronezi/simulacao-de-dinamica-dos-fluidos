@@ -1,21 +1,21 @@
-import { FluidSolver } from './FluidSolver.js?v=20261102a';
-import { Renderer } from './Renderer.js?v=20261102a';
-import { DEFAULT_LINE_WIDTH } from './PolygonGeometry.js?v=20261102a';
-import { applyMixin } from './app/applyMixin.js?v=20261102a';
-import { PointerInput } from './app/pointerInput.js?v=20261102a';
-import { ShapeDrag } from './app/shapeDrag.js?v=20261102a';
-import { HitTesting } from './app/hitTesting.js?v=20261102a';
-import { ShapeProperties } from './app/shapeProperties.js?v=20261102a';
-import { Rasterization } from './app/rasterization.js?v=20261102a';
-import { ControlPanel } from './app/controlPanel.js?v=20261102a';
-import { GridSize } from './app/gridSize.js?v=20261102a';
-import { UiChrome } from './app/uiChrome.js?v=20261102a';
-import { Viewport } from './app/viewport.js?v=20261102a';
-import { History } from './app/history.js?v=20261102a';
-import { Selection } from './app/selection.js?v=20261102a';
-import { Persistence } from './app/persistence.js?v=20261102a';
-import { HelpDialogs } from './app/helpDialogs.js?v=20261102a';
-import { PhysicalScale } from './app/physicalScale.js?v=20261102a';
+import { FluidSolver } from './FluidSolver.js?v=20261102b';
+import { Renderer } from './Renderer.js?v=20261102b';
+import { DEFAULT_LINE_WIDTH } from './PolygonGeometry.js?v=20261102b';
+import { applyMixin } from './app/applyMixin.js?v=20261102b';
+import { PointerInput } from './app/pointerInput.js?v=20261102b';
+import { ShapeDrag } from './app/shapeDrag.js?v=20261102b';
+import { HitTesting } from './app/hitTesting.js?v=20261102b';
+import { ShapeProperties } from './app/shapeProperties.js?v=20261102b';
+import { Rasterization } from './app/rasterization.js?v=20261102b';
+import { ControlPanel } from './app/controlPanel.js?v=20261102b';
+import { GridSize } from './app/gridSize.js?v=20261102b';
+import { UiChrome } from './app/uiChrome.js?v=20261102b';
+import { Viewport } from './app/viewport.js?v=20261102b';
+import { History } from './app/history.js?v=20261102b';
+import { Selection } from './app/selection.js?v=20261102b';
+import { Persistence } from './app/persistence.js?v=20261102b';
+import { HelpDialogs } from './app/helpDialogs.js?v=20261102b';
+import { PhysicalScale } from './app/physicalScale.js?v=20261102b';
 
 /**
  * @class FluidSimulationApp
@@ -98,11 +98,12 @@ export class FluidSimulationApp {
             throw new Error('Seu navegador não suporta o elemento canvas, que é essencial para esta aplicação.');
         }
         this._initializeState();
+        // Antes do _setupCanvas: ele restaura o autosave, que preenche o painel de escala física.
+        this._initPhysicalScalePanel();
         this._setupCanvas();
         this._bindEventListeners();
         this._initTooltip();
         this._initSliderFills();
-        this._initPhysicalScalePanel();
         this._requestPaint();
     }
 
@@ -141,6 +142,7 @@ export class FluidSimulationApp {
         this.stepsSlider = this.root.querySelector('#stepsSlider');
         this.viscSlider = this.root.querySelector('#viscSlider');
         this.viscValue = this.root.querySelector('#viscValue');
+        this.floatingPanelSpeedSi = this.root.querySelector('#floatingPanelSpeedSi');
         this.fluidSelect = this.root.querySelector('#fluidSelect');
         this.cellSizeInput = this.root.querySelector('#cellSizeInput');
         this.targetSpeedInput = this.root.querySelector('#targetSpeedInput');
@@ -501,11 +503,14 @@ export class FluidSimulationApp {
         document.body.addEventListener('mouseup', this._handleMouseUp.bind(this));
         this.canvasContainer.addEventListener('wheel', this._handleWheelZoom.bind(this), { passive: false });
         document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key === 'z') {
+            // Dentro de um campo de texto, Ctrl+Z/Y são do próprio campo, não do desenho.
+            const emCampo = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target && e.target.tagName);
+            const tecla = (e.key || '').toLowerCase();
+            if (e.ctrlKey && tecla === 'z' && !emCampo) {
                 e.preventDefault();
                 this.undo();
             }
-            if (e.ctrlKey && e.key === 'y') {
+            if (e.ctrlKey && tecla === 'y' && !emCampo) {
                 e.preventDefault();
                 this.redo();
             }
@@ -676,6 +681,7 @@ export class FluidSimulationApp {
 
         this.undoStack = [];
         this.redoStack = [];
+        this.editingSourceGroupIndex = -1;
 
         this._clearSelection();
         this._clearClipboard();

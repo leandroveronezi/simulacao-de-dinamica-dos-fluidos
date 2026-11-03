@@ -12,6 +12,7 @@ Simulador 2D de dinâmica dos fluidos (Lattice-Boltzmann D2Q9) 100% client-side:
 
 - `npm test` — testes do solver e dos objetos (Node puro, sem navegador): `tests/solver.test.mjs`, `tests/objetos.test.mjs` e `tests/fisica.test.mjs` (leis físicas: conservação de massa, energia, Poiseuille, Strouhal do cilindro, arrasto, rotor).
 - `npm run test:ui` — teste de interface com Playwright (`playwright-core` + `/usr/bin/google-chrome`, caminho fixo em `tests/ui.test.mjs`). Executa um roteiro de desenho e compara o estado exportado com `tests/snapshots/ui-config.json`. Para regravar o instantâneo, só quando a mudança de comportamento for intencional: `UPDATE_SNAPSHOT=1 npm run test:ui`.
+- `npm run test:ui` também roda `persistencia`, `selecao`, `viewport`, `edicao`, `versao`, `espessura`, `unidades` (escala física), `auditoria` (regressões da interface), `simulacao` e `estresse` (ações aleatórias com sementes fixas), todos em `tests/`.
 - `npm run test:all` — todos os testes.
 - Um único teste: `node --test --test-name-pattern="trecho do nome" tests/solver.test.mjs`.
 - Não há lint nem build.
@@ -21,6 +22,7 @@ Simulador 2D de dinâmica dos fluidos (Lattice-Boltzmann D2Q9) 100% client-side:
 Módulos em `js/`, carregados a partir de `main.js` (que instancia `FluidSimulationApp` em `window.__app`):
 
 - `FluidSolver.js` — motor físico LBM, sem DOM (por isso é testável no Node). Contém também rotores/palhetas com física de corpo rígido, partículas físicas, traçadores e os tipos de célula (`FluidSolver.CELL_TYPE`). O passo da simulação é `step({ u0, viscosity, moveTracers, ... })`.
+- `Unidades.js` — escala física (fluidos reais, `dt = ν_rede·dx²/ν_real`, m/s, `calibrar`), sem DOM; o painel "Escala Física" fica em `app/physicalScale.js`.
 - `Renderer.js` — desenho no Canvas 2D usando `ImageData` offscreen; importa o solver para ler o estado.
 - `PolygonGeometry.js` — polígonos das formas e operações booleanas (Clipper.js, global carregada por `<script>`).
 - `FluidSimulationApp.js` (~1000 linhas) — núcleo do controlador: construtor, consulta ao DOM, estado, ligação dos eventos, laço de simulação e pintura.
@@ -30,6 +32,6 @@ Os comentários do código citam "bugs.md #N" para itens já concluídos; o hist
 
 ## Convenções que não são óbvias
 
-- **Cache-busting manual:** os imports e o `<script>` usam `?v=20261102a` (em `index.html`, `main.js` e em todos os imports de `js/` e `js/app/`). Ao mudar o código servido ao navegador, troque esse sufixo em todos esses lugares, de forma consistente. Isso importa de verdade: os mixins de `js/app/` importam `FluidSimulationApp.js` de volta (import circular), e um sufixo diferente em um só lugar faz o navegador carregar o módulo duas vezes. `tests/versao.test.mjs` verifica a consistência.
+- **Cache-busting manual:** os imports e o `<script>` usam `?v=20261102b` (em `index.html`, `main.js` e em todos os imports de `js/` e `js/app/`). Ao mudar o código servido ao navegador, troque esse sufixo em todos esses lugares, de forma consistente. Isso importa de verdade: os mixins de `js/app/` importam `FluidSimulationApp.js` de volta (import circular), e um sufixo diferente em um só lugar faz o navegador carregar o módulo duas vezes. `tests/versao.test.mjs` verifica a consistência.
 - Os testes do solver importam `../js/FluidSolver.js` sem o sufixo `?v=`, então o solver não deve importar nada que exija DOM.
 - `fluid-sim-config.json` (grande, ~1,4 MB) é um cenário exportado pelo app e está no `.gitignore`; não o edite à mão nem o commite.
